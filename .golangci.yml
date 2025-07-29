@@ -1,0 +1,11 @@
+version: "1.0"
+run:
+  timeout: 5m
+linters:
+  enable:
+    - gofmt
+    - revive
+    - misspell
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

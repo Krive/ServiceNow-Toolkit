@@ -1,0 +1,25 @@
+# Binaries
+/bin/
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# Test binaries
+*.test
+*.prof
+# Vendor (if used)
+/vendor/
+# IDE files
+.idea/
+*.sublime*
+# Temp files
+*.log
+*.tmp
+# OS files
+.DS_Store
+# Coverage
+coverage.out
+.env
+.claude

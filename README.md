@@ -160,8 +160,6 @@ servicenowtoolkit explorer --demo
 
 ServiceNow Toolkit includes a stunning terminal user interface that brings ServiceNow exploration to your command line:
 
-![TUI](docs/images/TUI.png)
-
 ### **TUI Features:**
 - **Table Browser** - Interactive data exploration with filtering
 - **Identity Browser** - User, role, and group management interface

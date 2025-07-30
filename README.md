@@ -17,6 +17,8 @@
 
 ServiceNow Toolkit is a modern, feature-rich Go SDK and CLI tool that transforms how you interact with ServiceNow. Whether you're building integrations, automating workflows, or exploring data, ServiceNow Toolkit provides the tools you need with an emphasis on developer experience and productivity.
 
+![TUI](docs/images/TUI.png)
+
 ### ✨ **Why ServiceNow Toolkit?**
 
 - **🎯 Developer-First Design** - Intuitive APIs that feel natural to Go developers
@@ -36,6 +38,9 @@ ServiceNow Toolkit is a modern, feature-rich Go SDK and CLI tool that transforms
 ```bash
 # Install the CLI
 go install github.com/Krive/ServiceNow-Toolkit/cmd/servicenowtoolkit@latest
+
+# Create a shorter alias (optional)
+alias snt=servicenowtoolkit
 
 # Or use as a library in your Go project
 go get github.com/Krive/ServiceNow-Toolkit

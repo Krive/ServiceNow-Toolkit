@@ -372,7 +372,7 @@ func init() {
 	aggQueryCmd.Flags().StringP("min", "m", "", "Minimum field (field or field:alias)")
 	aggQueryCmd.Flags().StringP("max", "M", "", "Maximum field (field or field:alias)")
 	aggQueryCmd.Flags().StringP("filter", "f", "", "Filter criteria")
-	aggQueryCmd.Flags().StringP("having", "h", "", "Having clause")
+	aggQueryCmd.Flags().StringP("having", "H", "", "Having clause")
 	aggQueryCmd.Flags().StringP("order-by", "o", "", "Order by field (append ' DESC' for descending)")
 	aggQueryCmd.Flags().IntP("limit", "l", 0, "Limit number of results")
 	aggQueryCmd.Flags().StringP("format", "", "table", "Output format (table, json)")

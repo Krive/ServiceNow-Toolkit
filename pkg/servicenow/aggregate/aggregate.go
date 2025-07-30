@@ -224,13 +224,19 @@ func (aq *AggregateQuery) ExecuteWithContext(ctx context.Context) (*AggregateRes
 	// Parse the response
 	aggregateResult := &AggregateResult{}
 	
-	// Handle stats response format
-	if stats, ok := result.Result.(map[string]interface{}); ok {
-		aggregateResult.Stats = stats
+	// Handle stats response format - ServiceNow returns nested structure
+	if resultData, ok := result.Result.(map[string]interface{}); ok {
+		// Check for nested stats structure: result.stats
+		if stats, ok := resultData["stats"].(map[string]interface{}); ok {
+			aggregateResult.Stats = stats
+		} else {
+			// Fallback: treat result directly as stats
+			aggregateResult.Stats = resultData
+		}
 		
 		// If there are group by fields, the result will be in a different format
 		if len(aq.groupBy) > 0 {
-			if resultArray, ok := stats["result"].([]interface{}); ok {
+			if resultArray, ok := resultData["result"].([]interface{}); ok {
 				aggregateResult.Result = make([]map[string]interface{}, len(resultArray))
 				for i, item := range resultArray {
 					if itemMap, ok := item.(map[string]interface{}); ok {
@@ -261,25 +267,64 @@ func (aq *AggregateQuery) BuildParams() map[string]string {
 		params["sysparm_query"] = queryStr
 	}
 
-	// Add aggregate fields
+	// Add aggregate fields using correct ServiceNow parameters
 	if len(aq.aggregates) > 0 {
-		var aggParts []string
+		var countFields []string
+		var sumFields []string
+		var avgFields []string
+		var minFields []string
+		var maxFields []string
+		var stddevFields []string
+		var varianceFields []string
+		
 		for _, agg := range aq.aggregates {
-			var aggStr string
-			if agg.Field == "" && agg.Type == Count {
-				// COUNT(*) case
-				aggStr = string(agg.Type)
-			} else {
-				aggStr = fmt.Sprintf("%s(%s)", string(agg.Type), agg.Field)
-			}
+			fieldName := agg.Field
 			
-			if agg.Alias != "" {
-				aggStr = fmt.Sprintf("%s AS %s", aggStr, agg.Alias)
+			switch agg.Type {
+			case Count:
+				if agg.Field == "" {
+					// COUNT(*) case
+					params["sysparm_count"] = "true"
+				} else {
+					countFields = append(countFields, fieldName)
+				}
+			case Sum:
+				sumFields = append(sumFields, fieldName)
+			case Avg:
+				avgFields = append(avgFields, fieldName)
+			case Min:
+				minFields = append(minFields, fieldName)
+			case Max:
+				maxFields = append(maxFields, fieldName)
+			case StdDev:
+				stddevFields = append(stddevFields, fieldName)
+			case Variance:
+				varianceFields = append(varianceFields, fieldName)
 			}
-			
-			aggParts = append(aggParts, aggStr)
 		}
-		params["sysparm_sum_fields"] = strings.Join(aggParts, ",")
+		
+		// Set the appropriate parameters
+		if len(countFields) > 0 {
+			params["sysparm_count_fields"] = strings.Join(countFields, ",")
+		}
+		if len(sumFields) > 0 {
+			params["sysparm_sum_fields"] = strings.Join(sumFields, ",")
+		}
+		if len(avgFields) > 0 {
+			params["sysparm_avg_fields"] = strings.Join(avgFields, ",")
+		}
+		if len(minFields) > 0 {
+			params["sysparm_min_fields"] = strings.Join(minFields, ",")
+		}
+		if len(maxFields) > 0 {
+			params["sysparm_max_fields"] = strings.Join(maxFields, ",")
+		}
+		if len(stddevFields) > 0 {
+			params["sysparm_stddev_fields"] = strings.Join(stddevFields, ",")
+		}
+		if len(varianceFields) > 0 {
+			params["sysparm_variance_fields"] = strings.Join(varianceFields, ",")
+		}
 	}
 
 	// Add group by fields
@@ -327,7 +372,7 @@ func (ac *AggregateClient) CountRecords(qb *query.QueryBuilder) (int, error) {
 
 // CountRecordsWithContext returns the total number of records with context support
 func (ac *AggregateClient) CountRecordsWithContext(ctx context.Context, qb *query.QueryBuilder) (int, error) {
-	aq := ac.NewQuery().CountAll("total_count")
+	aq := ac.NewQuery().CountAll("count")
 	if qb != nil {
 		// Copy conditions from query builder
 		aq.queryBuilder = qb.Clone()
@@ -338,9 +383,9 @@ func (ac *AggregateClient) CountRecordsWithContext(ctx context.Context, qb *quer
 		return 0, err
 	}
 
-	// Extract count from result
+	// Extract count from result - ServiceNow returns it as "count"
 	if result.Stats != nil {
-		if count, ok := result.Stats["total_count"]; ok {
+		if count, ok := result.Stats["count"]; ok {
 			return parseIntFromInterface(count), nil
 		}
 	}
@@ -355,7 +400,7 @@ func (ac *AggregateClient) SumField(field string, qb *query.QueryBuilder) (float
 
 // SumFieldWithContext returns the sum of a numeric field with context support
 func (ac *AggregateClient) SumFieldWithContext(ctx context.Context, field string, qb *query.QueryBuilder) (float64, error) {
-	aq := ac.NewQuery().Sum(field, "field_sum")
+	aq := ac.NewQuery().Sum(field, field)
 	if qb != nil {
 		aq.queryBuilder = qb.Clone()
 	}
@@ -365,14 +410,16 @@ func (ac *AggregateClient) SumFieldWithContext(ctx context.Context, field string
 		return 0, err
 	}
 
-	// Extract sum from result
+	// Extract sum from result - ServiceNow returns nested structure: stats.sum.fieldname
 	if result.Stats != nil {
-		if sum, ok := result.Stats["field_sum"]; ok {
-			return parseFloatFromInterface(sum), nil
+		if sumObj, ok := result.Stats["sum"].(map[string]interface{}); ok {
+			if sum, ok := sumObj[field]; ok {
+				return parseFloatFromInterface(sum), nil
+			}
 		}
 	}
 
-	return 0, fmt.Errorf("sum not found in aggregate result")
+	return 0, fmt.Errorf("sum for field '%s' not found in aggregate result", field)
 }
 
 // AvgField returns the average of a numeric field
@@ -382,7 +429,7 @@ func (ac *AggregateClient) AvgField(field string, qb *query.QueryBuilder) (float
 
 // AvgFieldWithContext returns the average of a numeric field with context support
 func (ac *AggregateClient) AvgFieldWithContext(ctx context.Context, field string, qb *query.QueryBuilder) (float64, error) {
-	aq := ac.NewQuery().Avg(field, "field_avg")
+	aq := ac.NewQuery().Avg(field, field)
 	if qb != nil {
 		aq.queryBuilder = qb.Clone()
 	}
@@ -392,14 +439,16 @@ func (ac *AggregateClient) AvgFieldWithContext(ctx context.Context, field string
 		return 0, err
 	}
 
-	// Extract average from result
+	// Extract average from result - ServiceNow returns nested structure: stats.avg.fieldname
 	if result.Stats != nil {
-		if avg, ok := result.Stats["field_avg"]; ok {
-			return parseFloatFromInterface(avg), nil
+		if avgObj, ok := result.Stats["avg"].(map[string]interface{}); ok {
+			if avg, ok := avgObj[field]; ok {
+				return parseFloatFromInterface(avg), nil
+			}
 		}
 	}
 
-	return 0, fmt.Errorf("average not found in aggregate result")
+	return 0, fmt.Errorf("average for field '%s' not found in aggregate result", field)
 }
 
 // MinMaxField returns both minimum and maximum values of a field
@@ -409,7 +458,7 @@ func (ac *AggregateClient) MinMaxField(field string, qb *query.QueryBuilder) (mi
 
 // MinMaxFieldWithContext returns both minimum and maximum values with context support
 func (ac *AggregateClient) MinMaxFieldWithContext(ctx context.Context, field string, qb *query.QueryBuilder) (min, max float64, err error) {
-	aq := ac.NewQuery().Min(field, "field_min").Max(field, "field_max")
+	aq := ac.NewQuery().Min(field, field).Max(field, field)
 	if qb != nil {
 		aq.queryBuilder = qb.Clone()
 	}
@@ -419,16 +468,26 @@ func (ac *AggregateClient) MinMaxFieldWithContext(ctx context.Context, field str
 		return 0, 0, err
 	}
 
-	// Extract min and max from result
+	// Extract min and max from result - ServiceNow returns nested structure: stats.min.fieldname, stats.max.fieldname
 	if result.Stats != nil {
-		if minVal, ok := result.Stats["field_min"]; ok {
-			min = parseFloatFromInterface(minVal)
+		// Extract minimum
+		if minObj, ok := result.Stats["min"].(map[string]interface{}); ok {
+			if minVal, ok := minObj[field]; ok {
+				min = parseFloatFromInterface(minVal)
+			} else {
+				return 0, 0, fmt.Errorf("minimum for field '%s' not found in aggregate result", field)
+			}
 		} else {
 			return 0, 0, fmt.Errorf("minimum not found in aggregate result")
 		}
 
-		if maxVal, ok := result.Stats["field_max"]; ok {
-			max = parseFloatFromInterface(maxVal)
+		// Extract maximum
+		if maxObj, ok := result.Stats["max"].(map[string]interface{}); ok {
+			if maxVal, ok := maxObj[field]; ok {
+				max = parseFloatFromInterface(maxVal)
+			} else {
+				return 0, 0, fmt.Errorf("maximum for field '%s' not found in aggregate result", field)
+			}
 		} else {
 			return 0, 0, fmt.Errorf("maximum not found in aggregate result")
 		}

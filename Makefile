@@ -4,6 +4,7 @@ all: build test lint
 
 build:
 	go build -o bin/servicenowtoolkit ./cmd/servicenowtoolkit
+	go build -o bin/snt ./cmd/servicenowtoolkit
 
 test:
 	go test ./... -v

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -98,6 +99,7 @@ const (
 	simpleStateRecordDetail
 	simpleStateCustomTable
 	simpleStateQueryFilter
+	simpleStateXMLSearch
 )
 
 // Messages for async operations
@@ -138,6 +140,11 @@ type simpleModel struct {
 	recordXML       string
 	xmlScrollOffset int
 
+	// XML search
+	xmlSearchQuery    string
+	xmlSearchResults  []int // line numbers containing matches
+	xmlSearchIndex    int   // current match index
+
 	// Custom table input
 	customTableInput string
 
@@ -160,6 +167,7 @@ type simpleKeyMap struct {
 	CustomTable key.Binding
 	Filter      key.Binding
 	ViewXML     key.Binding
+	Search      key.Binding
 }
 
 func (k simpleKeyMap) ShortHelp() []key.Binding {
@@ -328,6 +336,7 @@ func newSimpleExplorer(client *servicenow.Client) *simpleModel {
 		CustomTable: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "custom table")),
 		Filter:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "filter")),
 		ViewXML:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "view XML")),
+		Search:      key.NewBinding(key.WithKeys("s", "/"), key.WithHelp("s", "search")),
 	}
 
 	return &simpleModel{
@@ -394,6 +403,20 @@ func (m simpleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCustomTableInput(msg)
 		} else if m.state == simpleStateQueryFilter {
 			return m.handleQueryFilterInput(msg)
+		} else if m.state == simpleStateXMLSearch {
+			return m.handleXMLSearchInput(msg)
+		}
+
+		// Handle search navigation when in record detail (before regular hotkeys)
+		if m.state == simpleStateRecordDetail && len(m.xmlSearchResults) > 0 {
+			switch {
+			case key.Matches(msg, key.NewBinding(key.WithKeys("n"))):
+				m.navigateSearchResult(1)
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("N"))):
+				m.navigateSearchResult(-1)
+				return m, nil
+			}
 		}
 
 		// Regular hotkey handling for other states
@@ -416,6 +439,10 @@ func (m simpleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleFilter()
 		case key.Matches(msg, m.keys.ViewXML):
 			return m.handleViewXML()
+		case key.Matches(msg, m.keys.Search):
+			if m.state == simpleStateRecordDetail {
+				return m.handleXMLSearch()
+			}
 		case key.Matches(msg, m.keys.Up):
 			if m.state == simpleStateRecordDetail {
 				return m.handleXMLScroll(-1)
@@ -479,6 +506,11 @@ func (m simpleModel) handleBack() (tea.Model, tea.Cmd) {
 	case simpleStateCustomTable, simpleStateQueryFilter:
 		m.state = simpleStateTableList
 		m.loadTableList()
+	case simpleStateXMLSearch:
+		m.state = simpleStateRecordDetail
+		m.xmlSearchQuery = ""
+		m.xmlSearchResults = []int{}
+		m.xmlSearchIndex = 0
 	default:
 		m.state = simpleStateMain
 		m.loadMainMenu()
@@ -651,6 +683,43 @@ func (m simpleModel) handleCustomTableInput(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 	return m, nil
 }
 
+// Handle XML search input
+func (m simpleModel) handleXMLSearchInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.xmlSearchQuery = ""
+		m.xmlSearchResults = []int{}
+		m.xmlSearchIndex = 0
+		m.state = simpleStateRecordDetail
+		return m, nil
+	case tea.KeyEnter:
+		if m.xmlSearchQuery != "" {
+			m.performXMLSearch(m.xmlSearchQuery)
+			m.state = simpleStateRecordDetail
+		} else {
+			m.state = simpleStateRecordDetail
+		}
+		return m, nil
+	case tea.KeyBackspace:
+		if len(m.xmlSearchQuery) > 0 {
+			m.xmlSearchQuery = m.xmlSearchQuery[:len(m.xmlSearchQuery)-1]
+			// Update search results in real-time
+			m.performXMLSearch(m.xmlSearchQuery)
+		}
+	case tea.KeyRunes:
+		runes := string(msg.Runes)
+		// Allow most characters in search
+		if runes != "q" || len(m.xmlSearchQuery) > 0 {
+			m.xmlSearchQuery += runes
+			// Update search results in real-time
+			m.performXMLSearch(m.xmlSearchQuery)
+		}
+	}
+	return m, nil
+}
+
 // Handle query filter input
 func (m simpleModel) handleQueryFilterInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
@@ -712,6 +781,98 @@ func (m simpleModel) handleXMLScroll(direction int) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// Handle XML search
+func (m simpleModel) handleXMLSearch() (tea.Model, tea.Cmd) {
+	if m.state == simpleStateRecordDetail && m.recordXML != "" {
+		m.state = simpleStateXMLSearch
+		m.xmlSearchQuery = ""
+		m.xmlSearchResults = []int{}
+		m.xmlSearchIndex = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+// Perform XML search
+func (m *simpleModel) performXMLSearch(query string) {
+	if query == "" {
+		m.xmlSearchResults = []int{}
+		m.xmlSearchIndex = 0
+		return
+	}
+
+	lines := strings.Split(m.recordXML, "\n")
+	m.xmlSearchResults = []int{}
+	
+	// Case-insensitive search
+	queryLower := strings.ToLower(query)
+	
+	for i, line := range lines {
+		if strings.Contains(strings.ToLower(line), queryLower) {
+			m.xmlSearchResults = append(m.xmlSearchResults, i)
+		}
+	}
+	
+	m.xmlSearchIndex = 0
+	
+	// Navigate to first match
+	if len(m.xmlSearchResults) > 0 {
+		m.scrollToSearchResult()
+	}
+}
+
+// Navigate to next/previous search result
+func (m *simpleModel) navigateSearchResult(direction int) {
+	if len(m.xmlSearchResults) == 0 {
+		return
+	}
+	
+	m.xmlSearchIndex += direction
+	if m.xmlSearchIndex < 0 {
+		m.xmlSearchIndex = len(m.xmlSearchResults) - 1
+	}
+	if m.xmlSearchIndex >= len(m.xmlSearchResults) {
+		m.xmlSearchIndex = 0
+	}
+	
+	m.scrollToSearchResult()
+}
+
+// Scroll to current search result
+func (m *simpleModel) scrollToSearchResult() {
+	if len(m.xmlSearchResults) == 0 || m.xmlSearchIndex < 0 || m.xmlSearchIndex >= len(m.xmlSearchResults) {
+		return
+	}
+	
+	targetLine := m.xmlSearchResults[m.xmlSearchIndex]
+	
+	// Calculate viewport
+	headerHeight := 3
+	footerHeight := 2
+	contentHeight := m.height - headerHeight - footerHeight
+	if contentHeight < 3 {
+		contentHeight = 3
+	}
+	xmlHeight := contentHeight - 4
+	
+	// Center the target line in the viewport
+	m.xmlScrollOffset = targetLine - xmlHeight/2
+	
+	// Ensure scroll bounds
+	lines := strings.Split(m.recordXML, "\n")
+	maxScroll := len(lines) - xmlHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	
+	if m.xmlScrollOffset < 0 {
+		m.xmlScrollOffset = 0
+	}
+	if m.xmlScrollOffset > maxScroll {
+		m.xmlScrollOffset = maxScroll
+	}
 }
 
 // Load main menu
@@ -798,10 +959,56 @@ func (m *simpleModel) loadRealRecordsWithQuerySync(tableName, query string) tea.
 		return recordsErrorMsg{err: err}
 	}
 
-	// Estimate total records
+	// Get actual total records using aggregate API with query
+	// Proper fallback estimate based on loaded records
 	total := offset + len(records)
 	if len(records) == m.pageSize {
-		total = (m.currentPage + 2) * m.pageSize
+		// Got a full page, assume there might be more
+		total = offset + len(records) + 1 // At least one more record exists
+	}
+	
+	// Try to get exact count using aggregate API with the filter (only on first page)
+	if m.currentPage == 0 {
+		if aggClient := m.client.Aggregate(tableName); aggClient != nil {
+		// Create a basic query builder with the raw query
+		// This is a simplified approach - in production you'd want proper parsing
+		aq := aggClient.NewQuery().CountAll("filtered_count")
+		
+		// Apply the query filter if it's a simple condition
+		if strings.Contains(query, "=") && !strings.Contains(query, "ORDERBY") {
+			// Extract the query part before any ORDERBY clause
+			queryPart := query
+			if idx := strings.Index(query, "ORDERBY"); idx > 0 {
+				queryPart = strings.TrimSpace(query[:idx])
+				// Remove trailing ^ if present
+				queryPart = strings.TrimSuffix(queryPart, "^")
+			}
+			
+			// For simple field=value queries, apply them
+			if queryPart != "" && queryPart != "ORDERBYDESCsys_updated_on" {
+				parts := strings.SplitN(queryPart, "=", 2)
+				if len(parts) == 2 {
+					field := strings.TrimSpace(parts[0])
+					value := strings.TrimSpace(parts[1])
+					aq.Equals(field, value)
+				}
+			}
+		}
+		
+		if result, err := aq.Execute(); err == nil && result.Stats != nil {
+			if countVal, ok := result.Stats["filtered_count"]; ok {
+				if actualTotal := parseIntFromInterface(countVal); actualTotal > 0 {
+					total = actualTotal
+				}
+			}
+		}
+		// If aggregate fails, keep the estimated total as fallback
+		}
+	} else {
+		// On subsequent pages, use previously calculated total if it seems reasonable
+		if m.totalRecords > offset+len(records) {
+			total = m.totalRecords
+		}
 	}
 
 	return recordsLoadedMsg{
@@ -849,6 +1056,7 @@ func (m *simpleModel) loadDemoRecordsSync(tableName string) tea.Msg {
 	}
 }
 
+
 // Load real records from ServiceNow synchronously
 func (m *simpleModel) loadRealRecordsSync(tableName string) tea.Msg {
 	// Calculate offset for current page
@@ -869,11 +1077,27 @@ func (m *simpleModel) loadRealRecordsSync(tableName string) tea.Msg {
 		return recordsErrorMsg{err: err}
 	}
 
-	// Estimate total records based on returned data
+	// Get actual total records using aggregate API
+	// Proper fallback estimate based on loaded records
 	total := offset + len(records)
 	if len(records) == m.pageSize {
-		// Assume there are more pages - rough estimate
-		total = (m.currentPage + 2) * m.pageSize
+		// Got a full page, assume there might be more
+		total = offset + len(records) + 1 // At least one more record exists
+	}
+	
+	// Try to get exact count using aggregate API (only on first page to avoid repeated calls)
+	if m.currentPage == 0 {
+		if aggClient := m.client.Aggregate(tableName); aggClient != nil {
+			if actualTotal, err := aggClient.CountRecords(nil); err == nil && actualTotal > 0 {
+				total = actualTotal
+			}
+			// If aggregate fails, keep the estimated total as fallback
+		}
+	} else {
+		// On subsequent pages, use previously calculated total if it seems reasonable
+		if m.totalRecords > offset+len(records) {
+			total = m.totalRecords
+		}
 	}
 
 	return recordsLoadedMsg{
@@ -1166,7 +1390,14 @@ func (m *simpleModel) updateRecordTitle(tableName string) {
 	if m.totalPages > 1 {
 		pageInfo = fmt.Sprintf(" (Page %d/%d)", m.currentPage+1, m.totalPages)
 	}
-	m.list.Title = fmt.Sprintf("Records: %s%s - %d total", tableName, pageInfo, m.totalRecords)
+	
+	// Add total records count if available
+	totalInfo := ""
+	if m.totalRecords > 0 {
+		totalInfo = fmt.Sprintf(" - %d total", m.totalRecords)
+	}
+	
+	m.list.Title = fmt.Sprintf("Records: %s%s%s", tableName, totalInfo, pageInfo)
 }
 
 // View method
@@ -1223,6 +1454,9 @@ func (m simpleModel) View() string {
 	case simpleStateQueryFilter:
 		headerContent = fmt.Sprintf("%s - 🔍 Filter: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
 		headerHeight = 3
+	case simpleStateXMLSearch:
+		headerContent = fmt.Sprintf("%s - 🔍 Search XML: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerHeight = 3
 	}
 
 	// Calculate content dimensions with absolute terminal constraints
@@ -1276,6 +1510,8 @@ func (m simpleModel) View() string {
 		content = m.renderCustomTableInput()
 	case simpleStateQueryFilter:
 		content = m.renderQueryFilter()
+	case simpleStateXMLSearch:
+		content = m.renderXMLSearch()
 	case simpleStateMain:
 		// Main menu with better spacing and organization
 		var connectionStatus string
@@ -1334,11 +1570,17 @@ func (m simpleModel) View() string {
 	case simpleStateTableList:
 		helpText = "↑/↓: navigate • enter: select • t: custom table • esc: back • q: quit"
 	case simpleStateRecordDetail:
-		helpText = "↑/↓: scroll • esc: back • q: quit"
+		if len(m.xmlSearchResults) > 0 {
+			helpText = fmt.Sprintf("↑/↓: scroll • s: search • n/N: next/prev match (%d/%d) • esc: back • q: quit", m.xmlSearchIndex+1, len(m.xmlSearchResults))
+		} else {
+			helpText = "↑/↓: scroll • s: search • esc: back • q: quit"
+		}
 	case simpleStateCustomTable:
 		helpText = "Type table name • enter: load table • esc: back • q: quit"
 	case simpleStateQueryFilter:
 		helpText = "Type ServiceNow query • enter: apply filter • esc: back • q: quit"
+	case simpleStateXMLSearch:
+		helpText = "Type search term • enter: search • esc: cancel • q: quit"
 	default:
 		helpText = "↑/↓: navigate • enter: select • esc: back • q: quit"
 	}
@@ -1446,6 +1688,45 @@ func (m simpleModel) renderQueryFilter() string {
 	return content.String()
 }
 
+// Render XML search
+func (m simpleModel) renderXMLSearch() string {
+	var content strings.Builder
+	content.WriteString(fmt.Sprintf("Search in XML content of record from: %s\n\n", m.currentTable))
+
+	// Calculate input box width accounting for borders
+	inputWidth := m.width - 8 // Conservative border + padding accounting
+	if inputWidth < 30 {
+		inputWidth = 30
+	}
+	if inputWidth > 60 {
+		inputWidth = 60
+	}
+
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(inputWidth).
+		Render(m.xmlSearchQuery + "_")
+
+	content.WriteString(inputBox)
+	
+	if len(m.xmlSearchResults) > 0 {
+		content.WriteString(fmt.Sprintf("\n\n🔍 Found %d matches", len(m.xmlSearchResults)))
+		content.WriteString("\nPress Enter to finish searching and navigate with n/N")
+	} else if m.xmlSearchQuery != "" {
+		content.WriteString("\n\n❌ No matches found")
+	}
+	
+	content.WriteString("\n\nSearch Examples:")
+	content.WriteString("\n• sys_id")
+	content.WriteString("\n• state")
+	content.WriteString("\n• 2024-01-01")
+	content.WriteString("\n• priority")
+	content.WriteString("\n\nPress Enter to search or Esc to cancel.")
+
+	return content.String()
+}
+
 // Render scrollable XML with navigation
 func (m simpleModel) renderScrollableXML() string {
 	if m.recordXML == "" {
@@ -1484,6 +1765,43 @@ func (m simpleModel) renderScrollableXML() string {
 	var visibleLines []string
 	for i := startLine; i < endLine && i < len(lines); i++ {
 		line := lines[i]
+		
+		// Highlight search matches if we have search results
+		if m.xmlSearchQuery != "" && len(m.xmlSearchResults) > 0 {
+			// Check if this line contains a match
+			isMatch := false
+			for _, matchLine := range m.xmlSearchResults {
+				if matchLine == i {
+					isMatch = true
+					break
+				}
+			}
+			
+			if isMatch {
+				// Highlight the search term in this line
+				queryLower := strings.ToLower(m.xmlSearchQuery)
+				lineLower := strings.ToLower(line)
+				
+				if strings.Contains(lineLower, queryLower) {
+					// Simple highlighting - this could be improved
+					highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0"))
+					line = strings.ReplaceAll(line, m.xmlSearchQuery, highlightStyle.Render(m.xmlSearchQuery))
+					// Also handle case variations
+					if m.xmlSearchQuery != strings.ToLower(m.xmlSearchQuery) {
+						line = strings.ReplaceAll(line, strings.ToLower(m.xmlSearchQuery), highlightStyle.Render(strings.ToLower(m.xmlSearchQuery)))
+					}
+					if m.xmlSearchQuery != strings.ToUpper(m.xmlSearchQuery) {
+						line = strings.ReplaceAll(line, strings.ToUpper(m.xmlSearchQuery), highlightStyle.Render(strings.ToUpper(m.xmlSearchQuery)))
+					}
+				}
+				
+				// Mark current search result with an indicator
+				if len(m.xmlSearchResults) > 0 && m.xmlSearchIndex < len(m.xmlSearchResults) && m.xmlSearchResults[m.xmlSearchIndex] == i {
+					line = "► " + line
+				}
+			}
+		}
+		
 		// Truncate lines that are too long for the XML width
 		if len(line) > xmlWidth-2 { // Account for padding
 			line = line[:xmlWidth-5] + "..."
@@ -1522,6 +1840,23 @@ func (m simpleModel) renderScrollableXML() string {
 	}
 
 	return content
+}
+
+// Helper function to parse interface{} to int (same as in table_browser.go)
+func parseIntFromInterface(value interface{}) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return 0
 }
 
 // Init method

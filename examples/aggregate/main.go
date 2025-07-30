@@ -14,7 +14,7 @@ import (
 func main() {
 	// Initialize ServiceNow client
 	client, err := servicenow.NewClientBasicAuth(
-		os.Getenv("SN_INSTANCE_URL"),
+		os.Getenv("SERVICENOW_INSTANCE_URL"),
 		os.Getenv("SN_USERNAME"),
 		os.Getenv("SN_PASSWORD"),
 	)

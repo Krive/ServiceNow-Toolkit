@@ -132,6 +132,7 @@ func (t *TableClient) Query() *query.QueryBuilder {
 	return query.New()
 }
 
+
 // ListWithQuery executes a query using the query builder
 func (t *TableClient) ListWithQuery(qb *query.QueryBuilder) ([]map[string]interface{}, error) {
 	return t.ListWithQueryContext(context.Background(), qb)

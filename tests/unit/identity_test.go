@@ -11,6 +11,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/core"
 	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/identity"
+	"github.com/Krive/ServiceNow-Toolkit/tests/testutils"
 )
 
 func TestIdentityClient_NewIdentityClient(t *testing.T) {
@@ -244,11 +245,10 @@ func TestIdentityClient_GetUser_Success(t *testing.T) {
 	}))
 	defer server.Close()
 	
-	// Create client with mock server
-	restyClient := resty.New().SetHostURL(server.URL)
-	client := &core.Client{
-		BaseURL: server.URL,
-		Client:  restyClient,
+	// Create client with mock server using test helper
+	client, err := testutils.NewMockClient(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
 	}
 	
 	identityClient := identity.NewIdentityClient(client)

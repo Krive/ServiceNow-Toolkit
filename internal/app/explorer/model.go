@@ -25,6 +25,7 @@ const (
 	simpleStateQuitConfirm
 	simpleStateColumnCustomizer
 	simpleStateViewManager
+	simpleStateExportDialog
 )
 
 // Messages for async operations
@@ -87,6 +88,9 @@ type Model struct {
 	viewConfigurations    map[string]*ViewConfiguration // Saved view configurations (in-memory)
 	viewManagerSelection  int                             // Selected index in view manager
 	configManager         *ConfigManager                  // Persistent configuration manager
+	
+	// Export functionality
+	exportDialog          *ExportDialog                   // Export dialog
 
 	// Advanced filtering components (lazy-loaded)
 	fieldMetadataService *tui.FieldMetadataService
@@ -116,6 +120,7 @@ type simpleKeyMap struct {
 	SaveView          key.Binding
 	ViewManager       key.Binding
 	ResetColumns      key.Binding
+	Export            key.Binding
 }
 
 func (k simpleKeyMap) ShortHelp() []key.Binding {
@@ -179,6 +184,7 @@ func New(client *servicenow.Client) *Model {
 		SaveView:         key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "save view")),
 		ViewManager:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "views")),
 		ResetColumns:     key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reset columns")),
+		Export:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
 	}
 
 	// Initialize configuration manager and load saved settings
@@ -194,6 +200,7 @@ func New(client *servicenow.Client) *Model {
 		selectedColumns:    []string{"sys_id"}, // Default to showing just sys_id
 		viewConfigurations: configManager.GetViewConfigurations(),
 		configManager:      configManager,
+		exportDialog:       NewExportDialog(),
 	}
 }
 

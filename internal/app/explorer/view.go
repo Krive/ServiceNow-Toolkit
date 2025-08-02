@@ -40,48 +40,47 @@ func (m Model) View() string {
 	var headerContent string
 
 	// Build header if needed
-	instanceName := m.getInstanceName()
-	instanceSuffix := ""
-	if instanceName != "" {
-		instanceSuffix = fmt.Sprintf(" [%s]", instanceName)
-	}
+	logoWithInstance := m.getCompactLogoWithInstance()
 
 	switch m.state {
 	case simpleStateMain:
-		headerContent = getCompactLogo() + " - ServiceNow TUI Explorer" + instanceSuffix
+		headerContent = logoWithInstance + " - ServiceNow TUI Explorer"
 		headerHeight = 3
 	case simpleStateTableList:
-		headerContent = getCompactLogo() + " - 📋 Table Browser" + instanceSuffix
+		headerContent = logoWithInstance + " - 📋 Table Browser"
 		headerHeight = 3
 	case simpleStateTableRecords:
-		headerContent = fmt.Sprintf("%s - 📋 Table: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 📋 Table: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateRecordDetail:
-		headerContent = fmt.Sprintf("%s - 📄 Record XML: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 📄 Record XML: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateCustomTable:
-		headerContent = getCompactLogo() + " - 🔧 Custom Table Input" + instanceSuffix
+		headerContent = logoWithInstance + " - 🔧 Custom Table Input"
 		headerHeight = 3
 	case simpleStateQueryFilter:
-		headerContent = fmt.Sprintf("%s - 🔍 Filter: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 🔍 Filter: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateXMLSearch:
-		headerContent = fmt.Sprintf("%s - 🔍 Search XML: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 🔍 Search XML: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateAdvancedFilter:
-		headerContent = fmt.Sprintf("%s - 🔧 Query Builder: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 🔧 Query Builder: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateFilterBrowser:
-		headerContent = fmt.Sprintf("%s - 📚 Filter Browser: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 📚 Filter Browser: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateQuitConfirm:
-		headerContent = getCompactLogo() + " - 🚪 Quit Confirmation" + instanceSuffix
+		headerContent = logoWithInstance + " - 🚪 Quit Confirmation"
 		headerHeight = 3
 	case simpleStateColumnCustomizer:
-		headerContent = fmt.Sprintf("%s - 🎛️ Column Customizer: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 🎛️ Column Customizer: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	case simpleStateViewManager:
-		headerContent = fmt.Sprintf("%s - 📋 View Manager: %s%s", getCompactLogo(), m.currentTable, instanceSuffix)
+		headerContent = fmt.Sprintf("%s - 📋 View Manager: %s", logoWithInstance, m.currentTable)
+		headerHeight = 3
+	case simpleStateExportDialog:
+		headerContent = fmt.Sprintf("%s - 📤 Export Data: %s", logoWithInstance, m.currentTable)
 		headerHeight = 3
 	}
 
@@ -160,6 +159,12 @@ func (m Model) View() string {
 		}
 	case simpleStateViewManager:
 		content = m.renderViewManager()
+	case simpleStateExportDialog:
+		if m.exportDialog != nil {
+			content = m.exportDialog.View()
+		} else {
+			content = "Export dialog not available"
+		}
 	case simpleStateMain:
 		// Main menu with better spacing and organization
 		var connectionStatus string
@@ -188,7 +193,12 @@ func (m Model) View() string {
 			Width(m.width).
 			Align(lipgloss.Center)
 
-		welcomeMsg := welcomeStyle.Render("Welcome to ServiceNow Toolkit!")
+		instanceName := m.getInstanceName()
+		welcomeText := "Welcome to ServiceNow Toolkit!"
+		if instanceName != "" {
+			welcomeText = fmt.Sprintf("Welcome to ServiceNow Toolkit [%s]!", instanceName)
+		}
+		welcomeMsg := welcomeStyle.Render(welcomeText)
 		statusMsg := statusStyle.Render(connectionStatus)
 		instructionMsg := instructionStyle.Render("Select an option below to get started:")
 
@@ -463,9 +473,9 @@ func (m Model) getHelpText() string {
 	switch m.state {
 	case simpleStateTableRecords:
 		if m.totalPages > 1 {
-			return "↑↓/k/j: navigate • enter: view XML • ←→/h/l: pages • f: filter • c: columns • v: views • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
+			return "↑↓/k/j: navigate • enter: view XML • ←→/h/l: pages • f: filter • c: columns • v: views • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
 		} else {
-			return "↑↓/k/j: navigate • enter: view XML • f: filter • c: columns • v: views • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
+			return "↑↓/k/j: navigate • enter: view XML • f: filter • c: columns • v: views • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
 		}
 	case simpleStateTableList:
 		return "↑↓/k/j: navigate • enter: select table • t: custom table • esc: back • q: quit"
@@ -491,6 +501,8 @@ func (m Model) getHelpText() string {
 		return "Column Customizer active - follow on-screen instructions • esc: finish"
 	case simpleStateViewManager:
 		return "↑↓/k/j: navigate • enter: apply view • d: delete • esc: back • q: quit"
+	case simpleStateExportDialog:
+		return "↑↓/k/j: select scope • ←→/h/l: select format • Shift+←→/H/L: reference mode • enter: export • esc: cancel • q: quit"
 	default:
 		return "↑↓/k/j: navigate • enter: select • esc: back • q: quit"
 	}

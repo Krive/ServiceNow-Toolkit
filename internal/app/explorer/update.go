@@ -18,7 +18,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Handle column customizer state first
+		// Handle export dialog state first
+		if m.state == simpleStateExportDialog && m.exportDialog != nil {
+			var cmd tea.Cmd
+			m.exportDialog, cmd = m.exportDialog.Update(msg)
+			if !m.exportDialog.IsActive() {
+				m.state = simpleStateTableRecords
+			}
+			return m, cmd
+		}
+		
+		// Handle column customizer state
 		if m.state == simpleStateColumnCustomizer && m.columnCustomizer != nil {
 			var cmd tea.Cmd
 			m.columnCustomizer, cmd = m.columnCustomizer.Update(msg)
@@ -229,6 +239,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleViewManager()
 		case key.Matches(msg, m.keys.ResetColumns):
 			return m.handleResetColumns()
+		case key.Matches(msg, m.keys.Export):
+			return m.handleExport()
 		// Disabled advanced features - keeping simple filter only
 		// case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
 		//	if m.state == simpleStateTableRecords {
@@ -276,6 +288,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.recordXML = msg.xml
 		m.xmlScrollOffset = 0 // Reset scroll when loading new XML
+		return m, nil
+		
+	case exportRequestMsg:
+		// Handle export request from dialog
+		m.loading = true
+		return m, m.performExport(msg.Scope, msg.Format, msg.ReferenceMode)
+		
+	case exportCompletedMsg:
+		m.loading = false
+		if msg.Error != nil {
+			// Show error in list (similar to recordsErrorMsg handling)
+			items := []list.Item{
+				simpleItem{title: "❌ Export Failed", desc: fmt.Sprintf("Export failed: %v", msg.Error), id: "error"},
+				simpleItem{title: "← Back to Table Records", desc: "Return to table records", id: "back"},
+			}
+			m.list.SetItems(items)
+		} else {
+			// Show success message
+			items := []list.Item{
+				simpleItem{title: "✅ Export Successful", desc: fmt.Sprintf("Data exported to: %s", msg.FilePath), id: "success"},
+				simpleItem{title: "← Back to Table Records", desc: "Return to table records", id: "back"},
+			}
+			m.list.SetItems(items)
+		}
 		return m, nil
 	}
 

@@ -10,8 +10,7 @@ import (
 )
 
 var (
-	demoMode            bool
-	resolvedInstanceURL string // Store the resolved instance URL for header display
+	demoMode bool
 )
 
 // Helper function to get credential from flag or environment variable
@@ -174,15 +173,33 @@ func getCompactLogo() string {
 		Render("🚀 ServiceNow Toolkit")
 }
 
-// Get instance name from resolved instance URL
+// Get compact ServiceNow Toolkit logo with instance name for headers
+func (m *Model) getCompactLogoWithInstance() string {
+	instanceName := m.getInstanceName()
+	if instanceName != "" {
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true).
+			Render(fmt.Sprintf("🚀 ServiceNow Toolkit [%s]", instanceName))
+	}
+	return getCompactLogo()
+}
+
+// Get instance name from client instance URL
 func (m *Model) getInstanceName() string {
-	if resolvedInstanceURL == "" {
+	if m.client == nil {
+		return ""
+	}
+
+	// Get the instance URL from the client's core
+	instanceURL := m.client.Core().InstanceURL
+	if instanceURL == "" {
 		return ""
 	}
 
 	// Extract instance name from URL
 	// URLs are typically like: https://dev12345.service-now.com or https://companyname.service-now.com
-	url := resolvedInstanceURL
+	url := instanceURL
 
 	// Remove protocol
 	if strings.HasPrefix(url, "https://") {

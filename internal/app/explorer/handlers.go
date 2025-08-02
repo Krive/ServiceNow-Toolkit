@@ -412,6 +412,20 @@ func (m *Model) initializeColumnCustomizer() {
 	}
 }
 
+// Handle export
+func (m Model) handleExport() (tea.Model, tea.Cmd) {
+	if m.state == simpleStateTableRecords {
+		if m.exportDialog != nil {
+			m.state = simpleStateExportDialog
+			m.exportDialog.SetActive(true)
+			m.exportDialog.SetDimensions(m.width, m.height)
+			m.updateListSize()
+			return m, nil
+		}
+	}
+	return m, nil
+}
+
 // Save view configuration
 func (m *Model) saveViewConfiguration(name, description string) {
 	config := &ViewConfiguration{

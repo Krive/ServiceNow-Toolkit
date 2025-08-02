@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/Krive/ServiceNow-Toolkit/internal/app/explorer"
 	"github.com/spf13/cobra"
@@ -62,7 +64,8 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("Global Settings:\n")
 		fmt.Printf("  Default Page Size: %d\n", settings.DefaultPageSize)
 		fmt.Printf("  Theme: %s\n", settings.Theme)
-		fmt.Printf("  Auto Save: %t\n\n", settings.AutoSave)
+		fmt.Printf("  Auto Save: %t\n", settings.AutoSave)
+		fmt.Printf("  Export Directory: %s\n\n", settings.ExportDirectory)
 		
 		if len(configs) == 0 {
 			fmt.Printf("No saved view configurations found.\n")
@@ -129,12 +132,75 @@ var configBackupCmd = &cobra.Command{
 	},
 }
 
+var configSetExportDirCmd = &cobra.Command{
+	Use:   "set-export-dir [directory]",
+	Short: "Set the export directory for exported files",
+	Long: `Set the directory where exported CSV and JSON files will be saved.
+	
+If no directory is provided, the current directory will be used.
+The directory will be created if it doesn't exist.`,
+	Args: cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		cm := explorer.NewConfigManager()
+		
+		// Load current config
+		if err := cm.LoadConfig(); err != nil {
+			fmt.Printf("Error loading configuration: %v\n", err)
+			return
+		}
+		
+		var newDir string
+		if len(args) > 0 {
+			newDir = args[0]
+		} else {
+			// If no argument provided, use current directory
+			if wd, err := os.Getwd(); err == nil {
+				newDir = wd
+			} else {
+				fmt.Printf("Error getting current directory: %v\n", err)
+				return
+			}
+		}
+		
+		// Expand ~ to home directory if needed
+		if strings.HasPrefix(newDir, "~/") {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				newDir = filepath.Join(homeDir, newDir[2:])
+			}
+		}
+		
+		// Convert to absolute path
+		if absPath, err := filepath.Abs(newDir); err == nil {
+			newDir = absPath
+		}
+		
+		// Test if directory exists or can be created
+		if err := os.MkdirAll(newDir, 0755); err != nil {
+			fmt.Printf("Error creating directory %s: %v\n", newDir, err)
+			return
+		}
+		
+		// Update config
+		settings := cm.GetGlobalSettings()
+		settings.ExportDirectory = newDir
+		
+		if err := cm.UpdateGlobalSettings(settings); err != nil {
+			fmt.Printf("Error updating configuration: %v\n", err)
+			return
+		}
+		
+		fmt.Printf("Export directory set to: %s\n", newDir)
+		fmt.Printf("All exported files will now be saved to this directory.\n")
+	},
+}
+
 func init() {
 	// Add subcommands to config command
 	configCmd.AddCommand(configPathCmd)
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configResetCmd)
 	configCmd.AddCommand(configBackupCmd)
+	configCmd.AddCommand(configSetExportDirCmd)
 	
 	// Add config command to root
 	rootCmd.AddCommand(configCmd)

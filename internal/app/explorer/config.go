@@ -19,6 +19,7 @@ type GlobalSettings struct {
 	DefaultPageSize int    `json:"default_page_size"`
 	Theme          string `json:"theme"`
 	AutoSave       bool   `json:"auto_save"`
+	ExportDirectory string `json:"export_directory"`
 }
 
 // ConfigManager handles loading and saving user configuration
@@ -32,6 +33,9 @@ func NewConfigManager() *ConfigManager {
 	configDir := getConfigDir()
 	configPath := filepath.Join(configDir, "servicenow-toolkit-config.json")
 	
+	// Set default export directory to Downloads folder if available, otherwise home directory
+	defaultExportDir := getDefaultExportDirectory()
+	
 	return &ConfigManager{
 		configPath: configPath,
 		config: &UserConfig{
@@ -41,6 +45,7 @@ func NewConfigManager() *ConfigManager {
 				DefaultPageSize: 20,
 				Theme:          "default",
 				AutoSave:       true,
+				ExportDirectory: defaultExportDir,
 			},
 		},
 	}
@@ -68,6 +73,37 @@ func getConfigDir() string {
 		return filepath.Join(homeDir, ".config", "servicenow-toolkit")
 	default:
 		return filepath.Join(homeDir, ".servicenow-toolkit")
+	}
+}
+
+// getDefaultExportDirectory returns the appropriate default export directory for the OS
+func getDefaultExportDirectory() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		// Last resort: current directory
+		return "."
+	}
+	
+	// Platform-specific default export directories
+	switch {
+	case os.Getenv("APPDATA") != "": // Windows
+		// Try Downloads folder first, fall back to Documents, then home
+		downloadsDir := filepath.Join(homeDir, "Downloads")
+		if _, err := os.Stat(downloadsDir); err == nil {
+			return downloadsDir
+		}
+		documentsDir := filepath.Join(homeDir, "Documents")
+		if _, err := os.Stat(documentsDir); err == nil {
+			return documentsDir
+		}
+		return homeDir
+	default: // Unix-like systems (macOS, Linux)
+		// Try Downloads folder first, fall back to home
+		downloadsDir := filepath.Join(homeDir, "Downloads")
+		if _, err := os.Stat(downloadsDir); err == nil {
+			return downloadsDir
+		}
+		return homeDir
 	}
 }
 

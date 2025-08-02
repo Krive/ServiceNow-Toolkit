@@ -1,39 +1,28 @@
 package main
 
 import (
-	"fmt"
-
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow"
+	"github.com/Krive/ServiceNow-Toolkit/internal/app/handlers"
 )
 
 var explorerCmd = &cobra.Command{
 	Use:   "explorer",
 	Short: "Launch interactive ServiceNow explorer",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var client *servicenow.Client
-		var err error
-
-		if demoMode {
-			client = nil             // Demo mode
-			resolvedInstanceURL = "" // Clear for demo mode
-		} else {
-			// Capture the resolved instance URL before creating client
-			resolvedInstanceURL = getCredentialLocal(instanceURL, "SERVICENOW_INSTANCE_URL")
-
-			client, err = createClient()
-			if err != nil {
-				return fmt.Errorf("failed to create ServiceNow client: %w", err)
-			}
+		config := handlers.ExplorerConfig{
+			InstanceURL:  getCredential(instanceURL, "SERVICENOW_INSTANCE_URL"),
+			Username:     getCredential(username, "SERVICENOW_USERNAME"),
+			Password:     getCredential(password, "SERVICENOW_PASSWORD"),
+			APIKey:       getCredential(apiKey, "SERVICENOW_API_KEY"),
+			AuthMethod:   authMethod,
+			ClientID:     getCredential(clientID, "SERVICENOW_CLIENT_ID"),
+			ClientSecret: getCredential(clientSecret, "SERVICENOW_CLIENT_SECRET"),
+			RefreshToken: getCredential(refreshToken, "SERVICENOW_REFRESH_TOKEN"),
+			DemoMode:     demoMode,
 		}
 
-		model := newSimpleExplorer(client)
-		program := tea.NewProgram(model, tea.WithAltScreen())
-
-		_, err = program.Run()
-		return err
+		return handlers.RunExplorer(cmd.Context(), config)
 	},
 }
 

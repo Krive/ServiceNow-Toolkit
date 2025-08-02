@@ -37,6 +37,9 @@ var (
 	clientSecret string
 	refreshToken string
 	authMethod   string
+
+	// Explorer flags
+	demoMode bool
 )
 
 func init() {

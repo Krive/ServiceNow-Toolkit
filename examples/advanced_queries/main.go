@@ -3,77 +3,59 @@ package main
 import (
 	"fmt"
 
-	"github.com/Krive/ServiceNow-Toolkit/internal/config"
-	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/core"
-	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/table"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/query"
 )
 
 func main() {
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		fmt.Println("Error loading config:", err)
-		return
-	}
-
-	client, err := core.NewClientBasicAuth(cfg.InstanceURL, cfg.Username, cfg.Password)
+	// Create a ServiceNow client - replace with your actual credentials
+	client, err := servicenow.NewClient(servicenow.Config{
+		InstanceURL: "https://your-instance.service-now.com",
+		Username:    "your-username",
+		Password:    "your-password",
+	})
 	if err != nil {
 		fmt.Println("Error creating client:", err)
 		return
 	}
-	tableClient := table.NewTableClient(client, "incident")
-
-	// QueryBuilder + ListOptions example
-	qb := tableClient.Query().
-		And("priority", table.Eq, 1).
-		Or("state", table.Eq, "New").
+	// QueryBuilder example
+	qb := query.New().
+		Equals("priority", 1).
+		Or().
+		Equals("state", "New").
 		OrderByDesc("number")
 
-	query, err := qb.Build()
+	queryString := qb.BuildQuery()
+	params := qb.Build()
+	fmt.Printf("Built query: %s\n", queryString)
+
+	// Use the ServiceNow client to query incidents
+	incidents, err := client.Table("incident").List(params)
 	if err != nil {
-		fmt.Println("Error building query:", err)
+		fmt.Println("Error listing incidents:", err)
 		return
 	}
+	fmt.Printf("Found %d incidents\n", len(incidents))
 
-	options := table.ListOptions{
-		Query:        query,
-		Fields:       []string{"number", "short_description", "priority", "state"},
-		Limit:        5,
-		DisplayValue: core.DisplayAll,
-		NoCount:      true,
+	// Show first few records
+	for i, incident := range incidents {
+		if i >= 3 { // Limit to first 3 for demo
+			break
+		}
+		fmt.Printf("Incident %d: %s - %s\n", i+1, incident["number"], incident["short_description"])
 	}
 
-	incidents, err := tableClient.ListOpt(options)
+	// Another query example with date conditions
+	recentQuery := query.New().
+		Equals("active", true).
+		And().
+		GreaterThan("sys_created_on", "2024-01-01")
+
+	recentParams := recentQuery.Build()
+	recentIncidents, err := client.Table("incident").List(recentParams)
 	if err != nil {
-		fmt.Println("Error listing with options:", err)
+		fmt.Println("Error listing recent incidents:", err)
 		return
 	}
-	fmt.Printf("Incidents with options: %+v\n", incidents)
-
-	// Pagination example
-	pagOptions := table.ListOptions{
-		Query:  "active=true",
-		Fields: []string{"number"},
-	}
-	allIncidents, err := tableClient.Paginate(pagOptions, 10) // Fetch in pages of 10
-	if err != nil {
-		fmt.Println("Error paginating:", err)
-		return
-	}
-	fmt.Printf("Total paginated incidents: %d\n", len(allIncidents))
-
-	// Metadata: GetSchema
-	schema, err := tableClient.GetSchema()
-	if err != nil {
-		fmt.Println("Error getting schema:", err)
-		return
-	}
-	fmt.Printf("Schema columns: %+v\n", schema) // Now a []ColumnMetadata
-
-	// GetKeys example
-	keys, err := tableClient.GetKeys("priority=1")
-	if err != nil {
-		fmt.Println("Error getting keys:", err)
-		return
-	}
-	fmt.Printf("Sys IDs for priority=1: %+v\n", keys)
+	fmt.Printf("Found %d recent active incidents\n", len(recentIncidents))
 }

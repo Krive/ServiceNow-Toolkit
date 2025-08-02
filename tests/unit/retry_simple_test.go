@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Krive/ServiceNow-Toolkit/internal/types"
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/retry"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/types"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/retry"
 )
 
 // Simple retry tests without core dependencies

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/ratelimit"
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/retry"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/ratelimit"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/retry"
 	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/aggregate"
 	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/attachment"
 	"github.com/Krive/ServiceNow-Toolkit/pkg/servicenow/batch"

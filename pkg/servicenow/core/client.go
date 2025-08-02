@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/ratelimit"
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/retry"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/ratelimit"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/retry"
 )
 
 type Client struct {

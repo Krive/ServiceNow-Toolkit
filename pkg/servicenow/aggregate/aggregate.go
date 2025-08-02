@@ -393,6 +393,45 @@ func (ac *AggregateClient) CountRecordsWithContext(ctx context.Context, qb *quer
 	return 0, fmt.Errorf("count not found in aggregate result")
 }
 
+// CountRecordsWithRawQuery returns the total number of records matching a raw query string
+func (ac *AggregateClient) CountRecordsWithRawQuery(rawQuery string) (int, error) {
+	return ac.CountRecordsWithRawQueryContext(context.Background(), rawQuery)
+}
+
+// CountRecordsWithRawQueryContext returns the total number of records with raw query and context support
+func (ac *AggregateClient) CountRecordsWithRawQueryContext(ctx context.Context, rawQuery string) (int, error) {
+	// Build parameters directly with raw query string
+	params := map[string]string{
+		"sysparm_count": "true",
+	}
+	
+	// Add the raw query if provided
+	if rawQuery != "" {
+		params["sysparm_query"] = rawQuery
+	}
+	
+	var result core.Response
+	err := ac.client.RawRequestWithContext(ctx, "GET", fmt.Sprintf("/stats/%s", ac.tableName), nil, params, &result)
+	if err != nil {
+		return 0, fmt.Errorf("aggregate query failed: %w", err)
+	}
+
+	// Parse the response - ServiceNow returns count in stats.count
+	if resultData, ok := result.Result.(map[string]interface{}); ok {
+		if stats, ok := resultData["stats"].(map[string]interface{}); ok {
+			if count, ok := stats["count"]; ok {
+				return parseIntFromInterface(count), nil
+			}
+		}
+		// Fallback: check if count is directly in result
+		if count, ok := resultData["count"]; ok {
+			return parseIntFromInterface(count), nil
+		}
+	}
+
+	return 0, fmt.Errorf("count not found in aggregate result")
+}
+
 // SumField returns the sum of a numeric field
 func (ac *AggregateClient) SumField(field string, qb *query.QueryBuilder) (float64, error) {
 	return ac.SumFieldWithContext(context.Background(), field, qb)

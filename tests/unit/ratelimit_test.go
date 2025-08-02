@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Krive/ServiceNow-Toolkit/internal/utils/ratelimit"
+	"github.com/Krive/ServiceNow-Toolkit/pkg/utils/ratelimit"
 )
 
 func TestTokenBucketLimiter(t *testing.T) {

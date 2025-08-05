@@ -50,7 +50,24 @@ func (m Model) View() string {
 		headerContent = logoWithInstance + " - 📋 Table Browser"
 		headerHeight = 3
 	case simpleStateTableRecords:
-		headerContent = fmt.Sprintf("%s - 📋 Table: %s", logoWithInstance, m.currentTable)
+		// Build table info with sort and bookmark indicators
+		tableInfo := m.currentTable
+		
+		// Add bookmark indicator
+		if m.configManager != nil && m.configManager.IsBookmarked(m.currentTable) {
+			tableInfo += " ⭐"
+		}
+		
+		// Add sort indicator
+		if m.sortColumn != "" {
+			sortIndicator := "↑"
+			if m.sortDirection == "desc" {
+				sortIndicator = "↓"
+			}
+			tableInfo += fmt.Sprintf(" (sorted by %s %s)", m.sortColumn, sortIndicator)
+		}
+		
+		headerContent = fmt.Sprintf("%s - 📋 Table: %s", logoWithInstance, tableInfo)
 		headerHeight = 3
 	case simpleStateRecordDetail:
 		headerContent = fmt.Sprintf("%s - 📄 Record XML: %s", logoWithInstance, m.currentTable)
@@ -81,6 +98,12 @@ func (m Model) View() string {
 		headerHeight = 3
 	case simpleStateExportDialog:
 		headerContent = fmt.Sprintf("%s - 📤 Export Data: %s", logoWithInstance, m.currentTable)
+		headerHeight = 3
+	case simpleStateEditField:
+		headerContent = fmt.Sprintf("%s - ✏️ Edit Field: %s.%s", logoWithInstance, m.currentTable, m.editingField)
+		headerHeight = 3
+	case simpleStateReferenceSearch:
+		headerContent = fmt.Sprintf("%s - 🔍 Reference Search: %s → %s", logoWithInstance, m.editingField, m.referenceSearchTable)
 		headerHeight = 3
 	}
 
@@ -165,6 +188,10 @@ func (m Model) View() string {
 		} else {
 			content = "Export dialog not available"
 		}
+	case simpleStateEditField:
+		content = m.renderFieldEditor()
+	case simpleStateReferenceSearch:
+		content = m.renderReferenceSearch()
 	case simpleStateMain:
 		// Main menu with better spacing and organization
 		var connectionStatus string
@@ -214,6 +241,14 @@ func (m Model) View() string {
 	contentLines := strings.Split(content, "\n")
 	if len(contentLines) > contentHeight {
 		content = strings.Join(contentLines[:contentHeight], "\n")
+	}
+	
+	// Ensure content doesn't exceed available space
+	if contentHeight > 0 {
+		maxLines := contentHeight
+		if len(contentLines) > maxLines {
+			content = strings.Join(contentLines[:maxLines], "\n")
+		}
 	}
 
 	// Create footer with only help text (consistent height)
@@ -391,8 +426,59 @@ func (m Model) renderScrollableXML() string {
 	var visibleLines []string
 	for i := startLine; i < endLine && i < len(lines); i++ {
 		line := lines[i]
+		originalLine := line // Keep original for field matching
 
-		// Highlight search matches if we have search results
+		// First truncate if needed, preserving the original for field detection
+		var truncated bool
+		if len(line) > xmlWidth-2 { // Account for padding
+			line = line[:xmlWidth-5] + "..."
+			truncated = true
+		}
+
+		// Track if this line should be highlighted
+		var shouldHighlight bool
+		
+		// Highlight current field if we have editable fields (use original line for detection)
+		if len(m.editableFields) > 0 && m.currentFieldIndex >= 0 && m.currentFieldIndex < len(m.editableFields) {
+			currentField := m.editableFields[m.currentFieldIndex]
+			
+			// More robust field detection using regex-like pattern matching
+			trimmedOriginal := strings.TrimSpace(originalLine)
+			
+			// Check for various XML tag patterns for the current field
+			patterns := []string{
+				fmt.Sprintf("<%s>", currentField),           // <field>
+				fmt.Sprintf("<%s ", currentField),           // <field attr="...">
+				fmt.Sprintf("</%s>", currentField),          // </field>
+				fmt.Sprintf("<%s/>", currentField),          // <field/>
+				fmt.Sprintf("<%s />", currentField),         // <field />
+			}
+			
+			// Check if any pattern matches
+			for _, pattern := range patterns {
+				if strings.Contains(trimmedOriginal, pattern) {
+					shouldHighlight = true
+					break
+				}
+			}
+			
+			// Additional check for complete single-line tags: <field>content</field>
+			if !shouldHighlight {
+				openTag := fmt.Sprintf("<%s", currentField)
+				closeTag := fmt.Sprintf("</%s>", currentField)
+				if strings.Contains(trimmedOriginal, openTag) && strings.Contains(trimmedOriginal, closeTag) {
+					// Verify this is really our field by checking if the opening tag is properly formed
+					if openTagIndex := strings.Index(trimmedOriginal, openTag); openTagIndex >= 0 {
+						remainingLine := trimmedOriginal[openTagIndex+len(openTag):]
+						if len(remainingLine) > 0 && (remainingLine[0] == '>' || remainingLine[0] == ' ') {
+							shouldHighlight = true
+						}
+					}
+				}
+			}
+		}
+
+		// Highlight search matches if we have search results (use original line for detection)
 		if m.xmlSearchQuery != "" && len(m.xmlSearchResults) > 0 {
 			// Check if this line contains a match
 			isMatch := false
@@ -404,20 +490,24 @@ func (m Model) renderScrollableXML() string {
 			}
 
 			if isMatch {
-				// Highlight the search term in this line
+				// Highlight the search term in this line (use original for detection, but apply to truncated)
 				queryLower := strings.ToLower(m.xmlSearchQuery)
-				lineLower := strings.ToLower(line)
+				originalLineLower := strings.ToLower(originalLine)
 
-				if strings.Contains(lineLower, queryLower) {
-					// Simple highlighting - this could be improved
+				if strings.Contains(originalLineLower, queryLower) {
+					// Simple highlighting - apply to the displayed (possibly truncated) line
 					highlightStyle := lipgloss.NewStyle().Background(lipgloss.Color("11")).Foreground(lipgloss.Color("0"))
-					line = strings.ReplaceAll(line, m.xmlSearchQuery, highlightStyle.Render(m.xmlSearchQuery))
-					// Also handle case variations
-					if m.xmlSearchQuery != strings.ToLower(m.xmlSearchQuery) {
-						line = strings.ReplaceAll(line, strings.ToLower(m.xmlSearchQuery), highlightStyle.Render(strings.ToLower(m.xmlSearchQuery)))
-					}
-					if m.xmlSearchQuery != strings.ToUpper(m.xmlSearchQuery) {
-						line = strings.ReplaceAll(line, strings.ToUpper(m.xmlSearchQuery), highlightStyle.Render(strings.ToUpper(m.xmlSearchQuery)))
+					
+					// Only highlight if the search term is still visible after truncation
+					if !truncated || strings.Contains(strings.ToLower(line), queryLower) {
+						line = strings.ReplaceAll(line, m.xmlSearchQuery, highlightStyle.Render(m.xmlSearchQuery))
+						// Also handle case variations
+						if m.xmlSearchQuery != strings.ToLower(m.xmlSearchQuery) {
+							line = strings.ReplaceAll(line, strings.ToLower(m.xmlSearchQuery), highlightStyle.Render(strings.ToLower(m.xmlSearchQuery)))
+						}
+						if m.xmlSearchQuery != strings.ToUpper(m.xmlSearchQuery) {
+							line = strings.ReplaceAll(line, strings.ToUpper(m.xmlSearchQuery), highlightStyle.Render(strings.ToUpper(m.xmlSearchQuery)))
+						}
 					}
 				}
 
@@ -427,11 +517,13 @@ func (m Model) renderScrollableXML() string {
 				}
 			}
 		}
-
-		// Truncate lines that are too long for the XML width
-		if len(line) > xmlWidth-2 { // Account for padding
-			line = line[:xmlWidth-5] + "..."
+		
+		// Apply field highlighting last, after all other processing
+		if shouldHighlight {
+			fieldStyle := lipgloss.NewStyle().Background(lipgloss.Color("240")).Foreground(lipgloss.Color("15"))
+			line = fieldStyle.Render(line)
 		}
+
 		visibleLines = append(visibleLines, line)
 	}
 	visibleXML := strings.Join(visibleLines, "\n")
@@ -473,18 +565,34 @@ func (m Model) getHelpText() string {
 	switch m.state {
 	case simpleStateTableRecords:
 		if m.totalPages > 1 {
-			return "↑↓/k/j: navigate • enter: view XML • ←→/h/l: pages • f: filter • c: columns • v: views • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
+			return "↑↓/k/j: navigate • enter: view XML • ←→/h/l: pages • f: filter • +/-: sort • c: columns • v: views • b: bookmark • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
 		} else {
-			return "↑↓/k/j: navigate • enter: view XML • f: filter • c: columns • v: views • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
+			return "↑↓/k/j: navigate • enter: view XML • f: filter • +/-: sort • c: columns • v: views • b: bookmark • e: export • ctrl+s: save • ctrl+r: reset • r: refresh • esc: back • q: quit"
 		}
 	case simpleStateTableList:
-		return "↑↓/k/j: navigate • enter: select table • t: custom table • esc: back • q: quit"
+		if m.showingBookmarks {
+			return "↑↓/k/j: navigate • enter: select table • t: custom table • B: show all tables • esc: back • q: quit"
+		} else {
+			return "↑↓/k/j: navigate • enter: select table • t: custom table • B: show bookmarks • esc: back • q: quit"
+		}
 	case simpleStateRecordDetail:
 		if len(m.xmlSearchResults) > 0 {
-			return fmt.Sprintf("↑↓: scroll • s: search • n/N: next/prev match (%d/%d) • esc: back • q: quit", m.xmlSearchIndex+1, len(m.xmlSearchResults))
+			return fmt.Sprintf("↑↓/k/j: navigate fields • s: search • E: edit • n/N: next/prev match (%d/%d) • esc: back • q: quit", m.xmlSearchIndex+1, len(m.xmlSearchResults))
 		} else {
-			return "↑↓: scroll • s: search XML • esc: back • q: quit"
+			if len(m.editableFields) > 0 {
+				currentField := ""
+				if m.currentFieldIndex >= 0 && m.currentFieldIndex < len(m.editableFields) {
+					currentField = m.editableFields[m.currentFieldIndex]
+				}
+				return fmt.Sprintf("↑↓/k/j: navigate fields • s: search XML • E: edit %s (%d/%d) • esc: back • q: quit", currentField, m.currentFieldIndex+1, len(m.editableFields))
+			} else {
+				return "↑↓/k/j: scroll • s: search XML • E: edit • esc: back • q: quit"
+			}
 		}
+	case simpleStateEditField:
+		return "Type to edit • ctrl+v: paste • ctrl+f: reference search • ctrl+a: clear • enter: save • esc: cancel • q: quit"
+	case simpleStateReferenceSearch:
+		return "Type to search • ↑↓/k/j: navigate • enter: select • esc: cancel • q: quit"
 	case simpleStateCustomTable:
 		return "Type table name • enter: load table • esc: back • q: quit"
 	case simpleStateQueryFilter:
@@ -711,4 +819,137 @@ func (m Model) renderViewManager() string {
 	}
 	
 	return content.String()
+}
+
+// renderFieldEditor renders the field editing interface
+func (m Model) renderFieldEditor() string {
+	var content strings.Builder
+	
+	// Show current field being edited - simple, no type information
+	fieldInfo := fmt.Sprintf("Editing field: %s", m.editingField)
+	content.WriteString(fieldInfo + "\n\n")
+	
+	// Show current value from record for reference
+	currentValue := m.getFieldValue(m.editingField)
+	
+	if currentValue != "" {
+		content.WriteString(fmt.Sprintf("Current value: %s\n\n", currentValue))
+	}
+	
+	// Calculate input box width accounting for borders
+	inputWidth := m.width - 8 // Conservative border + padding accounting
+	if inputWidth < 30 {
+		inputWidth = 30
+	}
+	if inputWidth > 80 {
+		inputWidth = 80
+	}
+	
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(inputWidth).
+		Render(m.editFieldValue + "_")
+	
+	content.WriteString(inputBox)
+	
+	content.WriteString("\n\nPress Enter to save, Esc to cancel")
+	
+	return content.String()
+}
+
+
+// renderReferenceSearch renders the reference field search interface
+func (m Model) renderReferenceSearch() string {
+	var content strings.Builder
+	
+	// Show search header
+	content.WriteString(fmt.Sprintf("🔍 Search %s records for field: %s\n\n", m.referenceSearchTable, m.editingField))
+	
+	// Search input box
+	inputWidth := m.width - 8
+	if inputWidth < 30 {
+		inputWidth = 30
+	}
+	if inputWidth > 60 {
+		inputWidth = 60
+	}
+	
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(1, 2).
+		Width(inputWidth).
+		Render(m.referenceSearchQuery + "_")
+	
+	content.WriteString(inputBox)
+	content.WriteString("\n\n")
+	
+	// Show search results
+	if len(m.referenceSearchResults) > 0 {
+		content.WriteString(fmt.Sprintf("Found %d results:\n\n", len(m.referenceSearchResults)))
+		
+		// Show up to 8 results
+		maxResults := 8
+		if len(m.referenceSearchResults) < maxResults {
+			maxResults = len(m.referenceSearchResults)
+		}
+		
+		for i := 0; i < maxResults; i++ {
+			record := m.referenceSearchResults[i]
+			
+			// Build display string
+			displayParts := []string{}
+			
+			// Try different fields for display
+			if name, ok := record["name"].(string); ok && name != "" {
+				displayParts = append(displayParts, name)
+			}
+			if desc, ok := record["short_description"].(string); ok && desc != "" {
+				displayParts = append(displayParts, desc)
+			}
+			if number, ok := record["number"].(string); ok && number != "" {
+				displayParts = append(displayParts, number)
+			}
+			
+			display := strings.Join(displayParts, " - ")
+			if display == "" {
+				if sysID, ok := record["sys_id"].(string); ok {
+					display = sysID
+				}
+			}
+			
+			// Highlight selected item
+			if i == m.referenceSelection {
+				selectedStyle := lipgloss.NewStyle().
+					Background(lipgloss.Color("86")).
+					Foreground(lipgloss.Color("0")).
+					Padding(0, 1)
+				content.WriteString("► " + selectedStyle.Render(display) + "\n")
+			} else {
+				content.WriteString("  " + display + "\n")
+			}
+		}
+		
+		if len(m.referenceSearchResults) > maxResults {
+			content.WriteString(fmt.Sprintf("\n... and %d more results", len(m.referenceSearchResults)-maxResults))
+		}
+	} else if m.referenceSearchQuery != "" {
+		content.WriteString("No results found")
+	}
+	
+	content.WriteString("\n\nType to search • ↑↓/k/j: navigate • Enter: select • Esc: cancel")
+	
+	return content.String()
+}
+
+
+
+// getCurrentFieldIndex returns the index of the currently editing field
+func (m Model) getCurrentFieldIndex() int {
+	for i, field := range m.editableFields {
+		if field == m.editingField {
+			return i
+		}
+	}
+	return 0
 }

@@ -32,21 +32,133 @@ func (m *Model) loadMainMenu() {
 // Load table list
 func (m *Model) loadTableList() {
 	items := []list.Item{
+		// Always keep custom table input at the top
 		simpleItem{title: "🔧 Custom Table", desc: "Enter custom table name", id: "custom_table"},
-		simpleItem{title: "incident", desc: "Service incidents", id: "incident"},
-		simpleItem{title: "problem", desc: "Problem records", id: "problem"},
-		simpleItem{title: "change_request", desc: "Change requests", id: "change_request"},
-		simpleItem{title: "sys_user", desc: "System users", id: "sys_user"},
-		simpleItem{title: "sys_user_group", desc: "User groups", id: "sys_user_group"},
-		simpleItem{title: "cmdb_ci_server", desc: "Server CIs", id: "cmdb_ci_server"},
-		simpleItem{title: "cmdb_ci_computer", desc: "Computer CIs", id: "cmdb_ci_computer"},
-		simpleItem{title: "sc_request", desc: "Service requests", id: "sc_request"},
-		simpleItem{title: "kb_knowledge", desc: "Knowledge articles", id: "kb_knowledge"},
-		simpleItem{title: "← Back to Main Menu", desc: "Return to main menu", id: "back"},
 	}
 
+	if m.showingBookmarks {
+		// Show only bookmarked tables
+		if m.configManager != nil {
+			bookmarks := m.configManager.GetBookmarks()
+			if len(bookmarks) > 0 {
+				// Add section header
+				items = append(items, simpleItem{title: "━━━ Bookmarked Tables ━━━", desc: "", id: "bookmarks_header"})
+				
+				for _, bookmark := range bookmarks {
+					title := bookmark.TableName + " ⭐"
+					desc := bookmark.DisplayName
+					items = append(items, simpleItem{
+						title: title,
+						desc:  desc,
+						id:    bookmark.TableName,
+					})
+				}
+			}
+		}
+		
+		// Add default tables that are bookmarked
+		if m.configManager != nil {
+			defaultTables := []struct{ name, desc string }{
+				{"incident", "Service incidents"},
+				{"problem", "Problem records"},
+				{"change_request", "Change requests"},
+				{"sys_user", "System users"},
+				{"sys_user_group", "User groups"},
+				{"cmdb_ci_server", "Server CIs"},
+				{"cmdb_ci_computer", "Computer CIs"},
+				{"sc_request", "Service requests"},
+				{"kb_knowledge", "Knowledge articles"},
+			}
+			
+			hasBookmarkedDefaults := false
+			for _, table := range defaultTables {
+				if m.configManager.IsBookmarked(table.name) {
+					if !hasBookmarkedDefaults {
+						// Add section header only if we have bookmarked defaults
+						if len(items) <= 1 { // Only custom table exists
+							items = append(items, simpleItem{title: "━━━ Bookmarked Tables ━━━", desc: "", id: "bookmarks_header"})
+						}
+						hasBookmarkedDefaults = true
+					}
+					title := table.name + " ⭐"
+					items = append(items, simpleItem{
+						title: title,
+						desc:  table.desc,
+						id:    table.name,
+					})
+				}
+			}
+		}
+		
+		m.list.Title = "ServiceNow Tables - Bookmarks Only"
+	} else {
+		// Show normal view (recent tables + defaults)
+		// Add recent tables from config (max 10)
+		if m.configManager != nil {
+			recentTables := m.configManager.GetRecentTables()
+			if len(recentTables) > 0 {
+				for _, recent := range recentTables {
+					// Add bookmark indicator if table is bookmarked
+					title := recent.TableName
+					desc := recent.DisplayName
+					if m.configManager.IsBookmarked(recent.TableName) {
+						title += " ⭐"
+					}
+					items = append(items, simpleItem{
+						title: title, 
+						desc:  desc, 
+						id:    recent.TableName,
+					})
+				}
+			}
+		}
+
+		// Always add default popular tables (avoid duplicates with recent tables)
+		defaultTables := []struct{ name, desc string }{
+			{"incident", "Service incidents"},
+			{"problem", "Problem records"},
+			{"change_request", "Change requests"},
+			{"sys_user", "System users"},
+			{"sys_user_group", "User groups"},
+			{"cmdb_ci_server", "Server CIs"},
+			{"cmdb_ci_computer", "Computer CIs"},
+			{"sc_request", "Service requests"},
+			{"kb_knowledge", "Knowledge articles"},
+		}
+		
+		// Build set of recent table names to avoid duplicates
+		recentTableNames := make(map[string]bool)
+		if m.configManager != nil {
+			recentTables := m.configManager.GetRecentTables()
+			for _, recent := range recentTables {
+				recentTableNames[recent.TableName] = true
+			}
+		}
+		
+		for _, table := range defaultTables {
+			// Skip if already in recent tables
+			if recentTableNames[table.name] {
+				continue
+			}
+			
+			title := table.name
+			if m.configManager != nil && m.configManager.IsBookmarked(table.name) {
+				title += " ⭐"
+			}
+			items = append(items, simpleItem{
+				title: title,
+				desc:  table.desc,
+				id:    table.name,
+			})
+		}
+		
+		m.list.Title = "ServiceNow Tables"
+	}
+
+	// Always add back button at the end
+	items = append(items, simpleItem{title: "← Back to Main Menu", desc: "Return to main menu", id: "back"})
+
 	m.list.SetItems(items)
-	m.list.Title = "ServiceNow Tables"
 }
 
 // Load table records command - returns a command instead of directly loading
@@ -77,6 +189,11 @@ func (m *Model) loadTableRecordsWithQueryCmd(tableName, query string) tea.Cmd {
 
 // Load real records from ServiceNow with query filter
 func (m *Model) loadRealRecordsWithQuerySync(tableName, query string) tea.Msg {
+	// Add table to recent history
+	if m.configManager != nil {
+		m.configManager.AddRecentTable(tableName, tableName) // TODO: Get proper display name
+	}
+	
 	// Validate query before making API call
 	if validationErr := m.validateRawQuery(query); validationErr != nil {
 		return recordsErrorMsg{err: validationErr}
@@ -181,6 +298,11 @@ func (m *Model) loadDemoRecordsSync(tableName string) tea.Msg {
 
 // Load real records from ServiceNow synchronously
 func (m *Model) loadRealRecordsSync(tableName string) tea.Msg {
+	// Add table to recent history
+	if m.configManager != nil {
+		m.configManager.AddRecentTable(tableName, tableName) // TODO: Get proper display name
+	}
+	
 	// Calculate offset for current page
 	offset := m.currentPage * m.pageSize
 
@@ -379,4 +501,108 @@ func (m *Model) validateRawQuery(query string) error {
 	}
 	
 	return nil
+}
+
+// Load table records with sorting
+func (m *Model) loadTableRecordsWithSortCmd(tableName, query, sortColumn, sortDirection string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			// Demo mode - return sorted demo data
+			return m.loadDemoRecordsSortedSync(tableName, sortColumn, sortDirection)
+		} else {
+			// Real mode - load from ServiceNow with sorting
+			return m.loadRealRecordsWithSortSync(tableName, query, sortColumn, sortDirection)
+		}
+	}
+}
+
+// Load real records from ServiceNow with sorting
+func (m *Model) loadRealRecordsWithSortSync(tableName, query, sortColumn, sortDirection string) tea.Msg {
+	// Add table to recent history
+	if m.configManager != nil {
+		m.configManager.AddRecentTable(tableName, tableName) // TODO: Get proper display name
+	}
+	
+	// Calculate offset
+	offset := m.currentPage * m.pageSize
+
+	// Build query with sorting
+	orderBy := fmt.Sprintf("ORDERBY%s%s", strings.ToUpper(sortDirection), sortColumn)
+	
+	finalQuery := query
+	if finalQuery != "" {
+		finalQuery = fmt.Sprintf("%s^%s", finalQuery, orderBy)
+	} else {
+		finalQuery = orderBy
+	}
+
+	params := map[string]string{
+		"sysparm_limit":         fmt.Sprintf("%d", m.pageSize),
+		"sysparm_offset":        fmt.Sprintf("%d", offset),
+		"sysparm_display_value": "all",
+		"sysparm_query":         finalQuery,
+	}
+
+	// Add fields if columns are selected
+	if len(m.selectedColumns) > 0 {
+		fieldsList := strings.Join(m.selectedColumns, ",")
+		params["sysparm_fields"] = fieldsList
+	}
+
+	records, err := m.client.Table(tableName).List(params)
+	if err != nil {
+		return recordsErrorMsg{err: err}
+	}
+
+	// Try to get exact count using aggregate API (only on first page to avoid repeated calls)
+	total := len(records)
+	if m.currentPage == 0 {
+		if aggClient := m.client.Aggregate(tableName); aggClient != nil {
+			// Extract the query part before any ORDERBY clause for counting
+			queryPart := query
+			if queryPart == "" {
+				queryPart = ""
+			}
+			
+			if actualTotal, err := aggClient.CountRecords(nil); err == nil && actualTotal > 0 {
+				total = actualTotal
+			}
+		}
+	}
+
+	return recordsLoadedMsg{
+		records: records,
+		total:   total,
+	}
+}
+
+// Load demo records with sorting (for demo mode)
+func (m *Model) loadDemoRecordsSortedSync(tableName, sortColumn, sortDirection string) tea.Msg {
+	// Use the same logic as loadDemoRecordsSync but with sorting
+	total := 100 // Demo total
+	
+	// Generate current page records
+	var records []map[string]interface{}
+	startRecord := m.currentPage*m.pageSize + 1
+	endRecord := startRecord + m.pageSize - 1
+	if endRecord > total {
+		endRecord = total
+	}
+
+	for i := startRecord; i <= endRecord; i++ {
+		record := m.generateDemoRecord(tableName, i)
+		records = append(records, record)
+	}
+	
+	// Simple sorting for demo data (just reverse order for desc)
+	if sortDirection == "desc" {
+		for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+			records[i], records[j] = records[j], records[i]
+		}
+	}
+	
+	return recordsLoadedMsg{
+		records: records,
+		total:   total,
+	}
 }

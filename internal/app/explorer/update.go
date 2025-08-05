@@ -80,6 +80,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleQueryFilterInput(msg)
 		} else if m.state == simpleStateXMLSearch {
 			return m.handleXMLSearchInput(msg)
+		} else if m.state == simpleStateEditField {
+			return m.handleEditFieldInput(msg)
+		} else if m.state == simpleStateReferenceSearch {
+			return m.handleReferenceSearchInput(msg)
 		}
 
 		// Handle search navigation when in record detail (before regular hotkeys)
@@ -231,6 +235,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == simpleStateRecordDetail {
 				return m.handleXMLSearch()
 			}
+		case key.Matches(msg, m.keys.EditField):
+			if m.state == simpleStateRecordDetail {
+				return m.handleEditField()
+			}
 		case key.Matches(msg, m.keys.ColumnCustomizer):
 			return m.handleColumnCustomizer()
 		case key.Matches(msg, m.keys.SaveView):
@@ -241,6 +249,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleResetColumns()
 		case key.Matches(msg, m.keys.Export):
 			return m.handleExport()
+		case key.Matches(msg, m.keys.SortAsc):
+			return m.handleSort("asc")
+		case key.Matches(msg, m.keys.SortDesc):
+			return m.handleSort("desc")
+		// Recent tables are now integrated into the main table browser
+		case key.Matches(msg, m.keys.BookmarkTable):
+			if m.state == simpleStateTableRecords {
+				return m.handleBookmarkTable()
+			}
+		case key.Matches(msg, m.keys.ShowBookmarks):
+			if m.state == simpleStateTableList {
+				return m.handleShowBookmarks()
+			}
 		// Disabled advanced features - keeping simple filter only
 		// case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
 		//	if m.state == simpleStateTableRecords {
@@ -252,11 +273,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		//	}
 		case key.Matches(msg, m.keys.Up):
 			if m.state == simpleStateRecordDetail {
-				return m.handleXMLScroll(-1)
+				// Use arrow keys for field navigation instead of scrolling
+				return m.handlePrevXMLField()
 			}
 		case key.Matches(msg, m.keys.Down):
 			if m.state == simpleStateRecordDetail {
-				return m.handleXMLScroll(1)
+				// Use arrow keys for field navigation instead of scrolling
+				return m.handleNextXMLField()
+			}
+		case key.Matches(msg, key.NewBinding(key.WithKeys("k"))):
+			if m.state == simpleStateRecordDetail {
+				// Vim-style up movement for field navigation
+				return m.handlePrevXMLField()
+			}
+		case key.Matches(msg, key.NewBinding(key.WithKeys("j"))):
+			if m.state == simpleStateRecordDetail {
+				// Vim-style down movement for field navigation
+				return m.handleNextXMLField()
 			}
 		}
 
@@ -288,6 +321,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.recordXML = msg.xml
 		m.xmlScrollOffset = 0 // Reset scroll when loading new XML
+		
+		// Extract editable fields from the loaded XML
+		m.editableFields = m.extractEditableFields()
+		m.currentFieldIndex = 0
+		
+		// Auto-scroll to the first editable field
+		if len(m.editableFields) > 0 {
+			m.scrollToCurrentField()
+		}
+		
 		return m, nil
 		
 	case exportRequestMsg:
@@ -312,6 +355,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.list.SetItems(items)
 		}
+		return m, nil
+		
+	case referenceSearchResultsMsg:
+		m.referenceSearchResults = msg.results
+		m.referenceSelection = 0 // Reset selection to first result
+		return m, nil
+		
+	case referenceSearchErrorMsg:
+		// For now, just clear results on error
+		m.referenceSearchResults = nil
+		m.referenceSelection = 0
 		return m, nil
 	}
 

@@ -26,6 +26,8 @@ const (
 	simpleStateColumnCustomizer
 	simpleStateViewManager
 	simpleStateExportDialog
+	simpleStateEditField
+	simpleStateReferenceSearch
 )
 
 // Messages for async operations
@@ -40,6 +42,14 @@ type recordsErrorMsg struct {
 
 type recordXMLLoadedMsg struct {
 	xml string
+}
+
+type referenceSearchResultsMsg struct {
+	results []map[string]interface{}
+}
+
+type referenceSearchErrorMsg struct {
+	err error
 }
 
 // Model represents the main explorer TUI model
@@ -70,6 +80,19 @@ type Model struct {
 	xmlSearchQuery   string
 	xmlSearchResults []int // line numbers containing matches
 	xmlSearchIndex   int   // current match index
+	
+	// Record editing
+	editMode           bool   // Whether in edit mode
+	editingField       string // Field name being edited
+	editFieldValue     string // Temporary value while editing
+	editableFields     []string // List of editable field names from current record
+	currentFieldIndex  int   // Current field index for XML navigation
+	
+	// Reference field search
+	referenceSearchQuery   string                     // Search query for reference fields
+	referenceSearchResults []map[string]interface{}   // Search results for reference picker
+	referenceSearchTable   string                     // Table being searched for references
+	referenceSelection     int                        // Selected reference in search results
 
 	// Custom table input
 	customTableInput string
@@ -91,6 +114,13 @@ type Model struct {
 	
 	// Export functionality
 	exportDialog          *ExportDialog                   // Export dialog
+
+	// Sorting functionality
+	sortColumn            string                          // Current sort column
+	sortDirection         string                          // "asc" or "desc"
+	
+	// Bookmarks view state
+	showingBookmarks      bool                            // Whether currently showing bookmarks view
 
 	// Advanced filtering components (lazy-loaded)
 	fieldMetadataService *tui.FieldMetadataService
@@ -121,6 +151,13 @@ type simpleKeyMap struct {
 	ViewManager       key.Binding
 	ResetColumns      key.Binding
 	Export            key.Binding
+	SortAsc           key.Binding
+	SortDesc          key.Binding
+	BookmarkTable     key.Binding
+	ShowBookmarks     key.Binding
+	EditField         key.Binding
+	SaveEdit          key.Binding
+	CancelEdit        key.Binding
 }
 
 func (k simpleKeyMap) ShortHelp() []key.Binding {
@@ -185,6 +222,13 @@ func New(client *servicenow.Client) *Model {
 		ViewManager:      key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "views")),
 		ResetColumns:     key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "reset columns")),
 		Export:           key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
+		SortAsc:          key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "sort asc")),
+		SortDesc:         key.NewBinding(key.WithKeys("-"), key.WithHelp("-", "sort desc")),
+		BookmarkTable:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "bookmark table")),
+		ShowBookmarks:    key.NewBinding(key.WithKeys("shift+b", "B"), key.WithHelp("B", "show bookmarks")),
+		EditField:        key.NewBinding(key.WithKeys("shift+e", "E"), key.WithHelp("E", "edit field")),
+		SaveEdit:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "save edit")),
+		CancelEdit:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel edit")),
 	}
 
 	// Initialize configuration manager and load saved settings

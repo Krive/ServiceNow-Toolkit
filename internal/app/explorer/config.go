@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // UserConfig represents the user's saved configuration
@@ -16,10 +17,27 @@ type UserConfig struct {
 
 // GlobalSettings represents global user preferences
 type GlobalSettings struct {
-	DefaultPageSize int    `json:"default_page_size"`
-	Theme          string `json:"theme"`
-	AutoSave       bool   `json:"auto_save"`
-	ExportDirectory string `json:"export_directory"`
+	DefaultPageSize int               `json:"default_page_size"`
+	Theme          string            `json:"theme"`
+	AutoSave       bool              `json:"auto_save"`
+	ExportDirectory string           `json:"export_directory"`
+	RecentTables   []RecentTable     `json:"recent_tables"`
+	BookmarkedTables []BookmarkedTable `json:"bookmarked_tables"`
+}
+
+// RecentTable represents a recently accessed table
+type RecentTable struct {
+	TableName   string `json:"table_name"`
+	DisplayName string `json:"display_name"`
+	AccessedAt  string `json:"accessed_at"` // ISO 8601 timestamp
+}
+
+// BookmarkedTable represents a user bookmarked table
+type BookmarkedTable struct {
+	TableName   string `json:"table_name"`
+	DisplayName string `json:"display_name"`
+	Alias       string `json:"alias,omitempty"` // User-defined friendly name
+	BookmarkedAt string `json:"bookmarked_at"`  // ISO 8601 timestamp
 }
 
 // ConfigManager handles loading and saving user configuration
@@ -46,6 +64,8 @@ func NewConfigManager() *ConfigManager {
 				Theme:          "default",
 				AutoSave:       true,
 				ExportDirectory: defaultExportDir,
+				RecentTables:   make([]RecentTable, 0),
+				BookmarkedTables: make([]BookmarkedTable, 0),
 			},
 		},
 	}
@@ -243,4 +263,87 @@ func (cm *ConfigManager) RestoreConfig() error {
 	}
 	
 	return cm.SaveConfig()
+}
+
+// AddRecentTable adds a table to the recent tables list
+func (cm *ConfigManager) AddRecentTable(tableName, displayName string) error {
+	now := time.Now().Format(time.RFC3339)
+	
+	// Remove if already exists
+	recent := cm.config.GlobalSettings.RecentTables
+	for i, table := range recent {
+		if table.TableName == tableName {
+			recent = append(recent[:i], recent[i+1:]...)
+			break
+		}
+	}
+	
+	// Add to beginning
+	newTable := RecentTable{
+		TableName:   tableName,
+		DisplayName: displayName,
+		AccessedAt:  now,
+	}
+	recent = append([]RecentTable{newTable}, recent...)
+	
+	// Keep only last 10 entries
+	if len(recent) > 10 {
+		recent = recent[:10]
+	}
+	
+	cm.config.GlobalSettings.RecentTables = recent
+	return cm.SaveConfig()
+}
+
+// GetRecentTables returns the list of recent tables
+func (cm *ConfigManager) GetRecentTables() []RecentTable {
+	return cm.config.GlobalSettings.RecentTables
+}
+
+// AddBookmark adds a table to bookmarks
+func (cm *ConfigManager) AddBookmark(tableName, displayName, alias string) error {
+	// Check if already bookmarked
+	for _, bookmark := range cm.config.GlobalSettings.BookmarkedTables {
+		if bookmark.TableName == tableName {
+			return fmt.Errorf("table %s is already bookmarked", tableName)
+		}
+	}
+	
+	now := time.Now().Format(time.RFC3339)
+	bookmark := BookmarkedTable{
+		TableName:    tableName,
+		DisplayName:  displayName,
+		Alias:        alias,
+		BookmarkedAt: now,
+	}
+	
+	cm.config.GlobalSettings.BookmarkedTables = append(cm.config.GlobalSettings.BookmarkedTables, bookmark)
+	return cm.SaveConfig()
+}
+
+// RemoveBookmark removes a table from bookmarks
+func (cm *ConfigManager) RemoveBookmark(tableName string) error {
+	bookmarks := cm.config.GlobalSettings.BookmarkedTables
+	for i, bookmark := range bookmarks {
+		if bookmark.TableName == tableName {
+			cm.config.GlobalSettings.BookmarkedTables = append(bookmarks[:i], bookmarks[i+1:]...)
+			return cm.SaveConfig()
+		}
+	}
+	return fmt.Errorf("bookmark for table %s not found", tableName)
+}
+
+// GetBookmarks returns the list of bookmarked tables
+func (cm *ConfigManager) GetBookmarks() []BookmarkedTable {
+	return cm.config.GlobalSettings.BookmarkedTables
+}
+
+// IsBookmarked checks if a table is bookmarked
+func (cm *ConfigManager) IsBookmarked(tableName string) bool {
+	for _, bookmark := range cm.config.GlobalSettings.BookmarkedTables {
+		if bookmark.TableName == tableName {
+			return true
+		}
+	}
+	return false
 }

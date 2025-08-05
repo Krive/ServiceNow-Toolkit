@@ -162,6 +162,10 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 				m.updateListSize()
 				return m, nil
 			}
+			// Skip section headers
+			if item.id == "recent_header" || item.id == "popular_header" || item.id == "bookmarks_header" {
+				return m, nil
+			}
 			m.currentTable = item.id
 			m.state = simpleStateTableRecords
 			m.currentPage = 0 // Reset to first page
@@ -229,6 +233,7 @@ func (m Model) handleViewRecordDetail(recordID string) (tea.Model, tea.Cmd) {
 			m.selectedRecord = record
 			m.state = simpleStateRecordDetail
 			m.loading = true
+			
 			m.updateListSize()
 			return m, m.loadRecordXMLCmd(recordID)
 		}
@@ -442,5 +447,465 @@ func (m *Model) saveViewConfiguration(name, description string) {
 	m.viewConfigurations[name] = config
 	if m.configManager != nil {
 		m.configManager.SaveViewConfiguration(name, config)
+	}
+}
+
+// handleSort handles column sorting
+func (m Model) handleSort(direction string) (tea.Model, tea.Cmd) {
+	if m.state != simpleStateTableRecords || len(m.selectedColumns) == 0 {
+		return m, nil
+	}
+	
+	// For now, sort by the first visible column
+	// TODO: Add UI to select which column to sort by
+	sortColumn := m.selectedColumns[0]
+	
+	// If already sorting by this column, toggle direction
+	if m.sortColumn == sortColumn {
+		if m.sortDirection == "asc" && direction == "asc" {
+			direction = "desc"
+		} else if m.sortDirection == "desc" && direction == "desc" {
+			direction = "asc"
+		}
+	}
+	
+	m.sortColumn = sortColumn
+	m.sortDirection = direction
+	m.loading = true
+	m.currentPage = 0 // Reset to first page when sorting
+	
+	// Reload data with sorting
+	return m, m.loadTableRecordsWithSortCmd(m.currentTable, m.currentQuery, sortColumn, direction)
+}
+
+// handleRecentTables shows recent tables list
+func (m Model) handleRecentTables() (tea.Model, tea.Cmd) {
+	if m.state != simpleStateTableList && m.state != simpleStateMain {
+		return m, nil
+	}
+	
+	// TODO: Implement recent tables UI
+	// For now, just switch to table list state
+	m.state = simpleStateTableList
+	return m, nil
+}
+
+// handleBookmarkTable bookmarks the current table
+func (m Model) handleBookmarkTable() (tea.Model, tea.Cmd) {
+	if m.state != simpleStateTableRecords || m.currentTable == "" {
+		return m, nil
+	}
+	
+	if m.configManager == nil {
+		return m, nil
+	}
+	
+	// Check if already bookmarked
+	if m.configManager.IsBookmarked(m.currentTable) {
+		// Remove bookmark
+		m.configManager.RemoveBookmark(m.currentTable)
+	} else {
+		// Add bookmark
+		displayName := m.currentTable // TODO: Get proper display name from table metadata
+		m.configManager.AddBookmark(m.currentTable, displayName, "")
+	}
+	
+	return m, nil
+}
+
+// handleShowBookmarks toggles between showing all tables and showing only bookmarked tables
+func (m Model) handleShowBookmarks() (tea.Model, tea.Cmd) {
+	if m.state != simpleStateTableList {
+		return m, nil
+	}
+	
+	// Toggle bookmarks view
+	m.showingBookmarks = !m.showingBookmarks
+	
+	// Reload table list with new view
+	m.loadTableList()
+	
+	return m, nil
+}
+
+// handleEditField enters edit mode for the currently selected field in the XML view
+func (m Model) handleEditField() (tea.Model, tea.Cmd) {
+	if m.state != simpleStateRecordDetail || m.selectedRecord == nil {
+		return m, nil
+	}
+	
+	// Extract editable fields from the current record
+	m.editableFields = m.extractEditableFields()
+	
+	if len(m.editableFields) == 0 {
+		return m, nil // No editable fields
+	}
+	
+	// Use the currently selected field index
+	if m.currentFieldIndex >= 0 && m.currentFieldIndex < len(m.editableFields) {
+		m.editingField = m.editableFields[m.currentFieldIndex]
+	} else {
+		// Default to first field if index is invalid
+		m.editingField = m.editableFields[0]
+		m.currentFieldIndex = 0
+	}
+	
+	// Get the current field value properly
+	m.editFieldValue = m.getFieldValue(m.editingField)
+	
+	m.state = simpleStateEditField
+	m.updateListSize()
+	
+	return m, nil
+}
+
+// handleNextXMLField moves to the next editable field in XML view and scrolls to it
+func (m Model) handleNextXMLField() (tea.Model, tea.Cmd) {
+	if m.selectedRecord == nil {
+		// If no record, just scroll down
+		return m.handleXMLScroll(1)
+	}
+	
+	// Extract editable fields if not already done
+	if len(m.editableFields) == 0 {
+		m.editableFields = m.extractEditableFields()
+	}
+	
+	if len(m.editableFields) == 0 {
+		// If no editable fields, just scroll down
+		return m.handleXMLScroll(1)
+	}
+	
+	// Move to next field (wrap around)
+	m.currentFieldIndex = (m.currentFieldIndex + 1) % len(m.editableFields)
+	
+	// Auto-scroll to keep selected field in view
+	m.scrollToCurrentField()
+	
+	return m, nil
+}
+
+// handlePrevXMLField moves to the previous editable field in XML view and scrolls to it
+func (m Model) handlePrevXMLField() (tea.Model, tea.Cmd) {
+	if m.selectedRecord == nil {
+		// If no record, just scroll up
+		return m.handleXMLScroll(-1)
+	}
+	
+	// Extract editable fields if not already done
+	if len(m.editableFields) == 0 {
+		m.editableFields = m.extractEditableFields()
+	}
+	
+	if len(m.editableFields) == 0 {
+		// If no editable fields, just scroll up
+		return m.handleXMLScroll(-1)
+	}
+	
+	// Move to previous field (wrap around)
+	m.currentFieldIndex = (m.currentFieldIndex - 1 + len(m.editableFields)) % len(m.editableFields)
+	
+	// Auto-scroll to keep selected field in view
+	m.scrollToCurrentField()
+	
+	return m, nil
+}
+
+// extractEditableFields returns ALL fields from the XML except sys_* fields
+func (m Model) extractEditableFields() []string {
+	if m.recordXML == "" {
+		return nil
+	}
+	
+	var fields []string
+	seen := make(map[string]bool) // Prevent duplicates
+	lines := strings.Split(m.recordXML, "\n")
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// Skip comments, closing tags, and XML declarations
+		if strings.HasPrefix(line, "<!--") || strings.HasPrefix(line, "</") || strings.HasPrefix(line, "<?") {
+			continue
+		}
+		
+		// Look for opening XML tags - handle multiple tags on one line if present
+		if strings.Contains(line, "<") && strings.Contains(line, ">") {
+			// Handle multiple tags that might be on the same line
+			remaining := line
+			for strings.Contains(remaining, "<") {
+				// Find the start of the next tag
+				tagStart := strings.Index(remaining, "<")
+				if tagStart == -1 {
+					break
+				}
+				
+				// Skip closing tags and comments
+				if strings.HasPrefix(remaining[tagStart:], "</") || strings.HasPrefix(remaining[tagStart:], "<!--") || strings.HasPrefix(remaining[tagStart:], "<?") {
+					// Move past this tag and continue
+					if nextPos := strings.Index(remaining[tagStart+1:], "<"); nextPos != -1 {
+						remaining = remaining[tagStart+1+nextPos:]
+					} else {
+						break
+					}
+					continue
+				}
+				
+				// Find the end of this tag name
+				start := tagStart + 1 // Skip the <
+				end := len(remaining)
+				
+				// Find the end of the tag name (first space, > or /)
+				for i := start; i < len(remaining); i++ {
+					if remaining[i] == ' ' || remaining[i] == '>' || remaining[i] == '/' {
+						end = i
+						break
+					}
+				}
+				
+				if end > start {
+					fieldName := remaining[start:end]
+					fieldName = strings.TrimSpace(fieldName)
+					
+					// Skip XML declaration, record wrapper, empty names, and sys_* fields
+					if fieldName != "" && fieldName != "?xml" && fieldName != "record" && !strings.HasPrefix(fieldName, "sys_") {
+						// Validate field name (should be valid XML name)
+						if isValidFieldName(fieldName) && !seen[fieldName] {
+							fields = append(fields, fieldName)
+							seen[fieldName] = true
+						}
+					}
+				}
+				
+				// Move past this tag and look for more
+				if nextPos := strings.Index(remaining[start:], "<"); nextPos != -1 {
+					remaining = remaining[start+nextPos:]
+				} else {
+					break
+				}
+			}
+		}
+	}
+	
+	// Debug: Uncomment this to see what fields are being extracted
+	// fmt.Printf("DEBUG: Extracted fields: %v\n", fields)
+	
+	// If no fields were found, let's try a more aggressive approach
+	if len(fields) == 0 {
+		// Fallback: Look for any tag that might be a field
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "<") && !strings.HasPrefix(line, "</") && 
+			   !strings.HasPrefix(line, "<?") && !strings.HasPrefix(line, "<!--") {
+				// Try to extract any tag name for debugging
+				if start := strings.Index(line, "<"); start >= 0 {
+					remaining := line[start+1:]
+					if end := strings.IndexAny(remaining, " />"); end > 0 {
+						tagName := remaining[:end]
+						if tagName != "record" && !strings.HasPrefix(tagName, "sys_") {
+							if !seen[tagName] {
+								fields = append(fields, tagName)
+								seen[tagName] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return fields
+}
+
+// isValidFieldName checks if a string is a valid XML field name
+func isValidFieldName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	
+	// First character must be letter or underscore
+	if !((name[0] >= 'a' && name[0] <= 'z') || (name[0] >= 'A' && name[0] <= 'Z') || name[0] == '_') {
+		return false
+	}
+	
+	// Rest can be letters, digits, underscore, hyphen, or dot
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	
+	return true
+}
+
+// performReferenceSearch searches for records in the reference table
+func (m Model) performReferenceSearch() tea.Cmd {
+	if m.client == nil || m.referenceSearchTable == "" || m.referenceSearchQuery == "" {
+		return nil
+	}
+	
+	return func() tea.Msg {
+		// Create search parameters
+		// Search in common display fields like name, short_description, number
+		searchFields := []string{"name", "short_description", "number", "title", "label"}
+		var queryParts []string
+		
+		for _, field := range searchFields {
+			queryParts = append(queryParts, fmt.Sprintf("%sCONTAINS%s", field, m.referenceSearchQuery))
+		}
+		
+		params := map[string]string{
+			"sysparm_query":  strings.Join(queryParts, "^OR"),
+			"sysparm_fields": "sys_id,name,short_description,number,title,label",
+			"sysparm_limit":  "10", // Limit to 10 results for UI
+		}
+		
+		records, err := m.client.Table(m.referenceSearchTable).List(params)
+		if err != nil {
+			return referenceSearchErrorMsg{err: err}
+		}
+		
+		return referenceSearchResultsMsg{results: records}
+	}
+}
+
+// getFieldValue extracts the value from XML for the given field
+func (m Model) getFieldValue(fieldName string) string {
+	if m.recordXML == "" {
+		return ""
+	}
+	
+	lines := strings.Split(m.recordXML, "\n")
+	
+	// Find the field value in XML
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// Handle both simple tags <field>value</field> and reference tags <field display_value="...">value</field>
+		openTagStart := fmt.Sprintf("<%s", fieldName)
+		closeTag := fmt.Sprintf("</%s>", fieldName)
+		
+		if strings.HasPrefix(line, openTagStart) && strings.HasSuffix(line, closeTag) {
+			// Find where the opening tag ends
+			tagEndIndex := strings.Index(line, ">")
+			if tagEndIndex == -1 {
+				continue
+			}
+			
+			// Extract value between opening tag and closing tag
+			start := tagEndIndex + 1
+			end := len(line) - len(closeTag)
+			if start < end {
+				return line[start:end]
+			} else if start == end {
+				// Empty field case
+				return ""
+			}
+		}
+		
+		// Also handle self-closing tags like <field/> or <field display_value="..." />
+		if strings.HasPrefix(line, openTagStart) && (strings.HasSuffix(line, "/>") || strings.Contains(line, " />")) {
+			// Self-closing tag means empty value
+			return ""
+		}
+	}
+	
+	return ""
+}
+
+// scrollToCurrentField automatically scrolls to keep the current field in the middle of the screen
+func (m *Model) scrollToCurrentField() {
+	if m.recordXML == "" || len(m.editableFields) == 0 || m.currentFieldIndex < 0 || m.currentFieldIndex >= len(m.editableFields) {
+		return
+	}
+	
+	currentField := m.editableFields[m.currentFieldIndex]
+	lines := strings.Split(m.recordXML, "\n")
+	
+	// Find the line containing the current field opening tag
+	targetLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, fmt.Sprintf("<%s>", currentField)) || strings.Contains(line, fmt.Sprintf("<%s ", currentField)) {
+			targetLine = i
+			break
+		}
+	}
+	
+	if targetLine == -1 {
+		return // Field not found in XML
+	}
+	
+	// Calculate viewport dimensions (same as renderScrollableXML)
+	headerHeight := 3
+	footerHeight := m.calculateHelpFooterHeight()
+	loadingHeight := 1
+	contentHeight := m.height - headerHeight - footerHeight - loadingHeight
+	if contentHeight < 3 {
+		contentHeight = 3
+	}
+	xmlHeight := contentHeight - 4
+	if xmlHeight < 1 {
+		xmlHeight = 1
+	}
+	
+	// Calculate desired scroll position to center the field
+	halfViewport := xmlHeight / 2
+	desiredScroll := targetLine - halfViewport
+	
+	// Apply bounds checking
+	maxScroll := len(lines) - xmlHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	
+	// Only scroll if we're not close to top/bottom edges
+	minScrollThreshold := 2 // Don't scroll if within 2 lines of top
+	maxScrollThreshold := maxScroll - 2 // Don't scroll if within 2 lines of bottom
+	
+	if desiredScroll < minScrollThreshold {
+		m.xmlScrollOffset = 0
+	} else if desiredScroll > maxScrollThreshold {
+		m.xmlScrollOffset = maxScroll
+	} else {
+		m.xmlScrollOffset = desiredScroll
+	}
+}
+
+// autoSelectFieldFromSearch attempts to auto-select the field that matches the current search result
+func (m *Model) autoSelectFieldFromSearch() {
+	if len(m.xmlSearchResults) == 0 || m.xmlSearchIndex < 0 || m.xmlSearchIndex >= len(m.xmlSearchResults) {
+		return
+	}
+	
+	if len(m.editableFields) == 0 {
+		m.editableFields = m.extractEditableFields()
+	}
+	
+	if len(m.editableFields) == 0 {
+		return
+	}
+	
+	// Get the line number of the current search result
+	targetLine := m.xmlSearchResults[m.xmlSearchIndex]
+	lines := strings.Split(m.recordXML, "\n")
+	
+	if targetLine < 0 || targetLine >= len(lines) {
+		return
+	}
+	
+	// Get the line content
+	line := strings.TrimSpace(lines[targetLine])
+	
+	// Try to find which field this line belongs to
+	for i, fieldName := range m.editableFields {
+		// Check if this line contains the field opening tag
+		if strings.Contains(line, fmt.Sprintf("<%s>", fieldName)) || 
+		   strings.Contains(line, fmt.Sprintf("<%s ", fieldName)) ||
+		   strings.Contains(line, fmt.Sprintf("</%s>", fieldName)) {
+			// Found the field, select it
+			m.currentFieldIndex = i
+			return
+		}
 	}
 }

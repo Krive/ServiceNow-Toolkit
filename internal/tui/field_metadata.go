@@ -95,19 +95,74 @@ func (fms *FieldMetadataService) GetFieldMetadata(tableName string) (*TableField
 
 // loadFieldMetadata loads field metadata from ServiceNow
 func (fms *FieldMetadataService) loadFieldMetadata(tableName string) (*TableFieldMetadata, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Query sys_dictionary table for field definitions
+	// Try multiple approaches to get field metadata
+	var records []map[string]interface{}
+	var err error
+	
+	// Approach 1: Standard query by table name
 	params := map[string]string{
-		"sysparm_query":  fmt.Sprintf("name=%s^ORname=STARTSWITH%s.", tableName, tableName),
+		"sysparm_query":  fmt.Sprintf("name=%s", tableName),
 		"sysparm_fields": "element,column_label,internal_type,max_length,mandatory,read_only,reference,default_value,comments,dependent",
 		"sysparm_limit":  "1000",
 	}
 
-	records, err := fms.client.Table("sys_dictionary").ListWithContext(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load field metadata: %w", err)
+	records, err = fms.client.Table("sys_dictionary").List(params)
+	// TODO: Remove debug output or make it conditional via env var
+	// fmt.Printf("DEBUG: Standard query for table '%s': %s\n", tableName, params["sysparm_query"])
+	// fmt.Printf("DEBUG: Standard query found %d records\n", len(records))
+	
+	// Approach 2: If no records, try with table name in name field
+	if len(records) == 0 {
+		altParams := map[string]string{
+			"sysparm_query":  fmt.Sprintf("name.name=%s", tableName),
+			"sysparm_fields": "element,column_label,internal_type,max_length,mandatory,read_only,reference,default_value,comments,dependent",
+			"sysparm_limit":  "1000",
+		}
+		
+		if altRecords, altErr := fms.client.Table("sys_dictionary").List(altParams); altErr == nil {
+			records = altRecords
+			// fmt.Printf("DEBUG: Alternative query (name.name) found %d records\n", len(records))
+		} else {
+			// fmt.Printf("DEBUG: Alternative query failed: %v\n", altErr)
+		}
+	}
+	
+	// Approach 3: If still no records, try broader query including parent tables
+	if len(records) == 0 {
+		extendedParams := map[string]string{
+			"sysparm_query":  fmt.Sprintf("name=%s^ORnameSTARTSWITH%s", tableName, tableName),
+			"sysparm_fields": "element,column_label,internal_type,max_length,mandatory,read_only,reference,name",
+			"sysparm_limit":  "1000",
+		}
+		
+		if extendedRecords, extErr := fms.client.Table("sys_dictionary").List(extendedParams); extErr == nil {
+			records = extendedRecords
+			// fmt.Printf("DEBUG: Extended query found %d records\n", len(records))
+		} else {
+			// fmt.Printf("DEBUG: Extended query failed: %v\n", extErr)
+		}
+	}
+	
+	// Approach 4: If all else fails, try a simple query to see if sys_dictionary is accessible
+	if len(records) == 0 {
+		testParams := map[string]string{
+			"sysparm_limit":  "5",
+			"sysparm_fields": "element,internal_type,name",
+		}
+		
+		if _, testErr := fms.client.Table("sys_dictionary").List(testParams); testErr == nil {
+			// fmt.Printf("DEBUG: Test query succeeded - sys_dictionary is accessible, found %d records\n", len(testRecords))
+			// if len(testRecords) > 0 {
+			//     fmt.Printf("DEBUG: Sample record fields: %v\n", testRecords[0])
+			// }
+		} else {
+			// fmt.Printf("DEBUG: Test query failed - sys_dictionary may not be accessible: %v\n", testErr)
+			err = testErr
+		}
+	}
+	
+	if err != nil && len(records) == 0 {
+		return nil, fmt.Errorf("failed to load field metadata from sys_dictionary: %w", err)
 	}
 
 	metadata := &TableFieldMetadata{
@@ -118,10 +173,19 @@ func (fms *FieldMetadataService) loadFieldMetadata(tableName string) (*TableFiel
 
 	// Process each field record
 	for _, record := range records {
+		fieldName := getString(record, "element")
+		internalType := getString(record, "internal_type")
+		
+		// Debug: Log field details for first few fields
+		// if i < 5 {
+		//     fmt.Printf("DEBUG: Field %d - element='%s', internal_type='%s', reference='%s'\n", 
+		//         i, fieldName, internalType, getString(record, "reference"))
+		// }
+		
 		field := FieldMetadata{
-			Name:        getString(record, "element"),
+			Name:        fieldName,
 			Label:       getString(record, "column_label"),
-			Type:        mapServiceNowFieldType(getString(record, "internal_type")),
+			Type:        mapServiceNowFieldType(internalType),
 			MaxLength:   getInt(record, "max_length"),
 			Mandatory:   getBool(record, "mandatory"),
 			ReadOnly:    getBool(record, "read_only"),
@@ -141,6 +205,11 @@ func (fms *FieldMetadataService) loadFieldMetadata(tableName string) (*TableFiel
 		}
 
 		metadata.Fields = append(metadata.Fields, field)
+	}
+
+	// If we still have no fields after processing, the table might not exist or user might not have access
+	if len(metadata.Fields) == 0 {
+		return nil, fmt.Errorf("no field metadata found for table '%s' - table may not exist or user may not have read access to sys_dictionary", tableName)
 	}
 
 	return metadata, nil
